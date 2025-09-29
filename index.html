@@ -12,7 +12,7 @@
       background:white; padding:10px;
       border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.3);
       font-size:14px; z-index:1000;
-      max-width: 250px;
+      max-width: 260px;
     }
     .control-panel label { display:block; margin-top:5px; }
   </style>
@@ -22,6 +22,10 @@
   <div class="control-panel">
     <button onclick="startTracking()">追跡開始</button>
     <button onclick="stopTracking()">追跡停止</button>
+    <hr>
+    <label>ルートファイル読み込み:
+      <input type="file" id="fileInput" accept=".kmz,.kml">
+    </label>
     <hr>
     <label>音声選択:
       <select id="voiceSelect"></select>
@@ -147,16 +151,56 @@
       }
     }
 
-    // ==== サンプルポイント（実際はKMZ/KMLからロード） ====
-    points = [
-      {lat:35.2897915, lng:139.1787426, name:"たこ焼きまえ交差点を左", notifiedFar:false, notifiedNear:false},
-      {lat:35.347874, lng:139.2169363, name:"おはかまえのT字路を右", notifiedFar:false, notifiedNear:false},
-      {lat:35.3381013, lng:139.2298993, name:"中井電話きょく交差点を左", notifiedFar:false, notifiedNear:false},
-    ];
+    // ==== KMZ/KML 読み込み ====
+    document.getElementById("fileInput").addEventListener("change", function(evt) {
+      let file = evt.target.files[0];
+      if (!file) return;
 
-    points.forEach(p => {
-      L.marker([p.lat, p.lng]).addTo(map).bindPopup(p.name);
+      let reader = new FileReader();
+      reader.onload = async function(e) {
+        let data = e.target.result;
+
+        if (file.name.endsWith(".kmz")) {
+          let zip = await JSZip.loadAsync(data);
+          let kmlFile = zip.file("doc.kml");
+          if (!kmlFile) { alert("doc.kml が見つかりません"); return; }
+          let kmlText = await kmlFile.async("string");
+          processKML(kmlText);
+        } else if (file.name.endsWith(".kml")) {
+          let text = new TextDecoder("utf-8").decode(data);
+          processKML(text);
+        }
+      };
+      reader.readAsArrayBuffer(file);
     });
+
+    function processKML(kmlText) {
+      let parser = new DOMParser();
+      let kml = parser.parseFromString(kmlText, "text/xml");
+      let geojson = toGeoJSON.kml(kml);
+
+      // 地図に描画
+      L.geoJSON(geojson).addTo(map);
+
+      // points[] を初期化して再構築
+      points = [];
+      geojson.features.forEach(f => {
+        if (f.geometry.type === "Point") {
+          let coords = f.geometry.coordinates; // [lon, lat]
+          let name = f.properties.name || "無名ポイント";
+          points.push({
+            lat: coords[1],
+            lng: coords[0],
+            name: name,
+            notifiedFar: false,
+            notifiedNear: false
+          });
+          L.marker([coords[1], coords[0]]).addTo(map).bindPopup(name);
+        }
+      });
+
+      alert(`ポイントを ${points.length} 件 読み込みました`);
+    }
   </script>
 </body>
 </html>
