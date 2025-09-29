@@ -7,8 +7,15 @@
   <style>
     body, html { margin:0; padding:0; height:100%; }
     #map { height:100%; }
-    .control-panel {
+
+    #menuToggle {
       position:absolute; top:10px; left:10px;
+      z-index:1100; background:white; border:1px solid #888;
+      border-radius:6px; padding:5px 10px; cursor:pointer;
+    }
+
+    .control-panel {
+      position:absolute; top:50px; left:10px;
       background:white; padding:10px;
       border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.3);
       font-size:14px; z-index:1000;
@@ -20,6 +27,11 @@
 </head>
 <body>
   <div id="map"></div>
+
+  <!-- メニュー開閉ボタン -->
+  <button id="menuToggle" onclick="toggleMenu()">≡ メニュー</button>
+
+  <!-- メニュー本体 -->
   <div class="control-panel">
     <button onclick="startTracking()">追跡開始</button>
     <button onclick="stopTracking()">追跡停止</button>
@@ -52,6 +64,12 @@
 
     let watchId = null;
     let points = []; // {lat, lng, name, notifiedFar, notifiedNear}
+
+    // ==== メニュー開閉 ====
+    function toggleMenu() {
+      let panel = document.querySelector('.control-panel');
+      panel.style.display = (panel.style.display === 'none') ? 'block' : 'none';
+    }
 
     // ==== 音声関連 ====
     let voices = [];
@@ -128,6 +146,30 @@
         }, (err) => {
           console.error("GPSエラー:", err);
         }, { enableHighAccuracy:true });
+
+        // 開始時に最寄りポイントを探してアナウンス
+        if (points.length > 0 && navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition((pos) => {
+            let lat = pos.coords.latitude;
+            let lng = pos.coords.longitude;
+            let currentLatLng = L.latLng(lat, lng);
+            let nearest = null;
+            let minDist = Infinity;
+            points.forEach(p => {
+              let d = currentLatLng.distanceTo(L.latLng(p.lat, p.lng));
+              if (d < minDist) {
+                minDist = d;
+                nearest = p;
+              }
+            });
+            if (nearest && minDist <= 300) {
+              let message = createNaviMessage(nearest.name, minDist);
+              speak(message);
+              if (minDist <= 80) nearest.notifiedNear = true;
+              else nearest.notifiedFar = true;
+            }
+          });
+        }
       } else {
         alert("GPSが利用できません");
       }
@@ -168,6 +210,9 @@
           let kmlFile = zip.file("doc.kml");
           if (!kmlFile) { alert("doc.kml が見つかりません"); return; }
           let kmlText = await kmlFile.async("string");
+          // 日本語文字化け対応
+          let decoder = new TextDecoder("utf-8");
+          kmlText = decoder.decode(new TextEncoder().encode(kmlText));
           processKML(kmlText);
         } else if (file.name.endsWith(".kml")) {
           let text = new TextDecoder("utf-8").decode(data);
