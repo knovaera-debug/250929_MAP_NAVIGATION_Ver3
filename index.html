@@ -23,9 +23,11 @@
     <button onclick="startTracking()">追跡開始</button>
     <button onclick="stopTracking()">追跡停止</button>
     <hr>
-    <label>ルートファイル読み込み:
+    <!-- ファイル読み込みボタンを独立表示 -->
+    <div>
+      <span>ルートファイル読み込み:</span><br>
       <input type="file" id="fileInput" accept=".kmz,.kml">
-    </label>
+    </div>
     <hr>
     <label>音声選択:
       <select id="voiceSelect"></select>
@@ -144,10 +146,10 @@
           await screen.orientation.lock(mode);
           alert(`画面を${mode === "portrait" ? "縦" : "横"}に固定しました`);
         } catch (err) {
-          alert("画面固定に失敗: " + err);
+          alert("画面固定に失敗しました。iOS Safariでは非対応です。端末の画面回転ロックをONにしてください。");
         }
       } else {
-        alert("この端末では画面固定がサポートされていません");
+        alert("この端末では画面固定がサポートされていません。端末の設定で回転ロックを有効にしてください。");
       }
     }
 
