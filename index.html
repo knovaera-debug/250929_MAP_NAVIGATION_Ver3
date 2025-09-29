@@ -5,18 +5,16 @@
   <title>ルート案内＆評価ポイントお知らせ</title>
   <link rel="stylesheet" href="leaflet.css">
   <style>
-    #map { height: 100vh; width: 100%; }
+    body, html { margin:0; padding:0; height:100%; }
+    #map { height:100%; }
     .control-panel {
-      position: absolute;
-      top: 10px;
-      left: 10px;
-      background: white;
-      padding: 10px;
-      border-radius: 8px;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-      font-size: 14px;
-      z-index: 1000;
+      position:absolute; top:10px; left:10px;
+      background:white; padding:10px;
+      border-radius:8px; box-shadow:0 2px 5px rgba(0,0,0,0.3);
+      font-size:14px; z-index:1000;
+      max-width: 250px;
     }
+    .control-panel label { display:block; margin-top:5px; }
   </style>
 </head>
 <body>
@@ -24,6 +22,17 @@
   <div class="control-panel">
     <button onclick="startTracking()">追跡開始</button>
     <button onclick="stopTracking()">追跡停止</button>
+    <hr>
+    <label>音声選択:
+      <select id="voiceSelect"></select>
+    </label>
+    <label>話速:
+      <input type="number" id="voiceRate" value="1.0" step="0.1" min="0.5" max="2.0">
+    </label>
+    <button onclick="testVoice()">テスト再生</button>
+    <hr>
+    <button onclick="lockOrientation('portrait')">縦固定</button>
+    <button onclick="lockOrientation('landscape')">横固定</button>
   </div>
 
   <script src="leaflet.js"></script>
@@ -32,50 +41,67 @@
 
   <script>
     let map = L.map('map').setView([35.3, 139.17], 13);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-    }).addTo(map);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
 
     let watchId = null;
-    let points = [];  // {lat, lng, name, notifiedFar, notifiedNear}
+    let points = []; // {lat, lng, name, notifiedFar, notifiedNear}
 
-    // 🔊 読み上げ関数
+    // ==== 音声関連 ====
+    let voices = [];
+    function loadVoices() {
+      voices = speechSynthesis.getVoices().filter(v => v.lang === "ja-JP");
+      let sel = document.getElementById("voiceSelect");
+      sel.innerHTML = "";
+      voices.forEach(v => {
+        let opt = document.createElement("option");
+        opt.value = v.name;
+        opt.text = v.name;
+        sel.add(opt);
+      });
+    }
+    speechSynthesis.onvoiceschanged = loadVoices;
+
     function speak(text) {
       const utter = new SpeechSynthesisUtterance(text);
       utter.lang = "ja-JP";
-      utter.rate = 1.0;
+      utter.rate = parseFloat(document.getElementById("voiceRate").value) || 1.0;
+      let sel = document.getElementById("voiceSelect");
+      let voice = voices.find(v => v.name === sel.value);
+      if (voice) utter.voice = voice;
       speechSynthesis.speak(utter);
     }
 
-    // 📐 ナビ風メッセージ生成
+    function testVoice() {
+      speak("音声ガイドのテストです");
+    }
+
+    // ==== ナビ風メッセージ ====
     function createNaviMessage(name, distance) {
       let action = "";
       if (name.includes("左")) action = "左折";
       else if (name.includes("右")) action = "右折";
       else if (name.includes("直進")) action = "直進";
+      else if (name.includes("高速")) action = "高速道路に入ります";
       else action = "進みます";
 
       if (distance > 100) {
-        return `${Math.round(distance)}メートル先、${name.replace(/を[左右直進].*$/, "")}を${action}です`;
+        return `${Math.round(distance)}メートル先、${name.replace(/を[左右直進].*$/, "")}を${action}`;
       } else {
-        return `まもなく、${name.replace(/を[左右直進].*$/, "")}を${action}です`;
+        return `まもなく、${name.replace(/を[左右直進].*$/, "")}を${action}`;
       }
     }
 
-    // 📍 距離チェック
     function checkProximity(currentLat, currentLng, target) {
       let currentLatLng = L.latLng(currentLat, currentLng);
       let targetLatLng = L.latLng(target.lat, target.lng);
       let distance = currentLatLng.distanceTo(targetLatLng);
 
-      // 300m以内
       if (distance < 300 && distance > 80 && !target.notifiedFar) {
         let message = createNaviMessage(target.name, distance);
         speak(message);
         target.notifiedFar = true;
       }
 
-      // 80m以内
       if (distance <= 80 && !target.notifiedNear) {
         let message = createNaviMessage(target.name, distance);
         speak(message);
@@ -83,26 +109,23 @@
       }
     }
 
-    // 🚗 追跡開始
+    // ==== GPS追跡 ====
     function startTracking() {
       if (navigator.geolocation) {
         watchId = navigator.geolocation.watchPosition((pos) => {
           let lat = pos.coords.latitude;
           let lng = pos.coords.longitude;
-
-          // 自車位置を表示
-          L.circleMarker([lat, lng], {radius: 6, color: 'red'}).addTo(map);
+          L.circleMarker([lat, lng], {radius:6, color:'red'}).addTo(map);
           map.setView([lat, lng], 16);
-
-          // 各ポイントをチェック
           points.forEach(p => checkProximity(lat, lng, p));
-        });
+        }, (err) => {
+          console.error("GPSエラー:", err);
+        }, { enableHighAccuracy:true });
       } else {
         alert("GPSが利用できません");
       }
     }
 
-    // ⏹️ 追跡停止
     function stopTracking() {
       if (watchId) {
         navigator.geolocation.clearWatch(watchId);
@@ -110,14 +133,27 @@
       }
     }
 
-    // 🗂️ サンプルポイント（本来はKMZ/KMLから読み込み）
+    // ==== 画面縦横固定 ====
+    async function lockOrientation(mode) {
+      if (screen.orientation && screen.orientation.lock) {
+        try {
+          await screen.orientation.lock(mode);
+          alert(`画面を${mode === "portrait" ? "縦" : "横"}に固定しました`);
+        } catch (err) {
+          alert("画面固定に失敗: " + err);
+        }
+      } else {
+        alert("この端末では画面固定がサポートされていません");
+      }
+    }
+
+    // ==== サンプルポイント（実際はKMZ/KMLからロード） ====
     points = [
-      {lat: 35.2897915, lng: 139.1787426, name: "たこ焼きまえ交差点を左", notifiedFar: false, notifiedNear: false},
-      {lat: 35.347874, lng: 139.2169363, name: "おはかまえのT字路を右", notifiedFar: false, notifiedNear: false},
-      {lat: 35.3381013, lng: 139.2298993, name: "中井電話きょく交差点を左", notifiedFar: false, notifiedNear: false},
+      {lat:35.2897915, lng:139.1787426, name:"たこ焼きまえ交差点を左", notifiedFar:false, notifiedNear:false},
+      {lat:35.347874, lng:139.2169363, name:"おはかまえのT字路を右", notifiedFar:false, notifiedNear:false},
+      {lat:35.3381013, lng:139.2298993, name:"中井電話きょく交差点を左", notifiedFar:false, notifiedNear:false},
     ];
 
-    // 地図上にポイントを表示
     points.forEach(p => {
       L.marker([p.lat, p.lng]).addTo(map).bindPopup(p.name);
     });
