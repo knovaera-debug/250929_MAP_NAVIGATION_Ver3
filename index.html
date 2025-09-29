@@ -15,6 +15,7 @@
       max-width: 260px;
     }
     .control-panel label { display:block; margin-top:5px; }
+    #fileInput { display:block; margin-top:5px; width:220px; }
   </style>
 </head>
 <body>
@@ -23,9 +24,9 @@
     <button onclick="startTracking()">追跡開始</button>
     <button onclick="stopTracking()">追跡停止</button>
     <hr>
-    <!-- ファイル読み込みボタンを独立表示 -->
+    <!-- ルートファイル読み込み -->
     <div>
-      <span>ルートファイル読み込み:</span><br>
+      <span style="font-weight:bold;">ルートファイル読み込み:</span>
       <input type="file" id="fileInput" accept=".kmz,.kml">
     </div>
     <hr>
