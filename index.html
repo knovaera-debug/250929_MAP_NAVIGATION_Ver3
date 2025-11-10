@@ -1,79 +1,107 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>実車評価支援ツール</title>
-<link rel="stylesheet" href="leaflet.css" />
+
+<link rel="stylesheet" href="leaflet.css">
 <script src="leaflet.js"></script>
 <script src="jszip.min.js"></script>
 <script src="togeojson.umd.js"></script>
+
 <style>
-  html,body{height:100%;margin:0}
-  #map{position:fixed; inset:0; background:#f2f2f2;}
-  #panel{
-    position:fixed; left:10px; top:calc(10px + env(safe-area-inset-top));
-    z-index:2147483000; background:#fff; padding:10px 12px; border-radius:12px;
-    box-shadow:0 6px 24px rgba(0,0,0,.18);
-    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;
-    min-width:300px; max-width:min(94vw,560px);
+  html, body { height: 100%; margin: 0; }
+  #map { width: 100%; height: 100%; }
+
+  #menu {
+    position: absolute;
+    top: 10px; left: 10px;
+    background: rgba(255, 255, 255, 0.95);
+    padding: 10px;
+    border-radius: 10px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    z-index: 9999;
   }
-  h1{margin:0 0 8px;font-size:15px;font-weight:700}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
-  button{padding:10px 14px; min-height:40px; border-radius:12px; cursor:pointer; border:1px solid #ddd; background:#fff;}
-  #start{background:#16a34a;color:#fff;border-color:#16a34a}
-  #recenter{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
-  #cp{background:#f59e0b;color:#fff;border-color:#f59e0b}
-  #toast{position:fixed; left:50%; bottom:90px; transform:translateX(-50%);
-    z-index:2147483100; display:none; background:rgba(0,0,0,.85); color:#fff;
-    padding:10px 14px; border-radius:12px; font-size:14px}
+
+  #toast {
+    position: fixed;
+    bottom: 80px; left: 50%;
+    transform: translateX(-50%);
+    background: rgba(0, 0, 0, 0.8);
+    color: white;
+    padding: 10px 16px;
+    border-radius: 10px;
+    display: none;
+    z-index: 9999;
+    font-size: 14px;
+  }
+
+  #status {
+    font-weight: bold;
+    margin-top: 8px;
+  }
+
+  button {
+    margin-top: 5px;
+    padding: 8px 12px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  #startBtn { background-color: #0078D7; color: white; }
+  #voiceTestBtn { background-color: #00B050; color: white; }
+  #closeMenuBtn { background-color: #888; color: white; }
 </style>
 </head>
+
 <body>
 <div id="map"></div>
 
-<div id="panel">
-  <h1>実車評価支援ツール</h1>
+<div id="menu">
+  <h3>実車評価支援ツール</h3>
 
-  <!-- ✅ GitHubルート選択 -->
-  <div class="row">
-    <label for="githubSelect">GitHubルート選択:</label>
-    <select id="githubSelect" class="grow">
-      <option value="">（選択してください）</option>
-      <option value="https://raw.githubusercontent.com/knovaera-debug/250929_MAP_NAVIGATION_Ver3/main/data/Final_国内DPコース評価ポイント付き_251007_v10.kmz">
-        Final_国内DPコース評価ポイント付き_251007_v10.kmz
-      </option>
-      <option value="https://raw.githubusercontent.com/knovaera-debug/250929_MAP_NAVIGATION_Ver3/main/data/ルートTest.kmz">
-        ルートTest.kmz
-      </option>
-    </select>
-  </div>
+  <!-- ✅ GitHubルート選択追加 -->
+  <label for="githubSelect">GitHubルート選択：</label><br>
+  <select id="githubSelect">
+    <option value="">（選択してください）</option>
+    <option value="https://raw.githubusercontent.com/knovaera-debug/250929_MAP_NAVIGATION_Ver3/main/data/Final_国内DPコース評価ポイント付き_251007_v10.kmz">
+      Final_国内DPコース評価ポイント付き_251007_v10.kmz
+    </option>
+    <option value="https://raw.githubusercontent.com/knovaera-debug/250929_MAP_NAVIGATION_Ver3/main/data/ルートTest.kmz">
+      ルートTest.kmz
+    </option>
+  </select>
 
-  <div class="row">
-    <button id="start">追跡開始</button>
-    <button id="recenter">現在地へ</button>
-    <button id="cp" disabled>チェックポイント</button>
-  </div>
+  <br><br>
 
-  <div class="row">
-    <label><input type="checkbox" id="keepCentered" checked />自車を常に中心</label>
-  </div>
+  <!-- 既存のローカルファイル選択 -->
+  <label for="file">ローカルファイル読み込み：</label><br>
+  <input type="file" id="file" accept=".kmz">
+
+  <br><br>
+  <button id="startBtn">追跡開始</button>
+  <button id="voiceTestBtn">音声テスト</button>
+  <button id="closeMenuBtn">メニューを閉じる</button>
+
+  <div id="status">待機中</div>
 </div>
 
 <div id="toast"></div>
 
 <script>
-// ==================== 地図の初期化 ====================
-const map = L.map('map').setView([35.68, 139.76], 14);
+let map = L.map('map').setView([35.68, 139.76], 14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19, attribution: '© OpenStreetMap'
 }).addTo(map);
 
-let userMarker = null;
 let routeLayer = null;
+let markerLayer = null;
+let userMarker = null;
 let watchId = null;
 
-// ==================== トースト表示 ====================
+// ====== トースト ======
 function showToast(msg, duration = 2500) {
   const toast = document.getElementById("toast");
   toast.textContent = msg;
@@ -81,17 +109,20 @@ function showToast(msg, duration = 2500) {
   setTimeout(() => toast.style.display = "none", duration);
 }
 
-// ==================== GitHubからKMZを読み込む ====================
-document.getElementById("githubSelect").addEventListener("change", async function() {
-  const url = this.value;
-  if (!url) return;
-  showToast("ルートを読み込み中...");
+// ====== 音声案内 ======
+function speak(text) {
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.lang = "ja-JP";
+  utter.pitch = 1.0;
+  utter.rate = 1.0;
+  utter.volume = 1.0;
+  speechSynthesis.cancel();
+  speechSynthesis.speak(utter);
+}
 
+// ====== ファイル読込共通処理 ======
+async function loadKMZ(blob) {
   try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("ファイルを取得できませんでした");
-    const blob = await res.blob();
-
     const zip = new JSZip();
     const loaded = await zip.loadAsync(blob);
     const kmlFile = Object.keys(loaded.files).find(f => f.endsWith(".kml"));
@@ -103,58 +134,92 @@ document.getElementById("githubSelect").addEventListener("change", async functio
     const geojson = toGeoJSON.kml(kmlDoc);
 
     if (routeLayer) map.removeLayer(routeLayer);
-    routeLayer = L.geoJSON(geojson, {
-      color: "orange",
-      weight: 4
+    routeLayer = L.geoJSON(geojson, { color: "orange", weight: 4 }).addTo(map);
+    map.fitBounds(routeLayer.getBounds());
+
+    // 評価ポイント表示
+    if (markerLayer) map.removeLayer(markerLayer);
+    markerLayer = L.geoJSON(geojson, {
+      pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+        radius: 6, color: "blue", fillColor: "blue", fillOpacity: 0.8
+      }).bindPopup(f.properties.name || "ポイント")
     }).addTo(map);
 
-    map.fitBounds(routeLayer.getBounds());
-    showToast("✅ ルート読込完了: " + url.split("/").pop());
+    showToast("✅ ルートを読み込みました");
+    speak("ルートを読み込みました");
+    document.getElementById("status").textContent = "ルート読込完了";
   } catch (err) {
     console.error(err);
     showToast("❌ KMZ読込エラー: " + err.message);
   }
+}
+
+// ====== ローカルファイル読込 ======
+document.getElementById("file").addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  showToast("ローカルファイルを読み込み中...");
+  const blob = await file.arrayBuffer();
+  await loadKMZ(new Blob([blob]));
 });
 
-// ==================== 現在地追跡 ====================
-document.getElementById("start").addEventListener("click", () => {
+// ====== GitHubファイル読込 ======
+document.getElementById("githubSelect").addEventListener("change", async function() {
+  const url = this.value;
+  if (!url) return;
+  showToast("GitHubルートを読み込み中...");
+  document.getElementById("status").textContent = "ルート読込中...";
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("ファイル取得に失敗しました");
+    const blob = await res.blob();
+    await loadKMZ(blob);
+  } catch (err) {
+    console.error(err);
+    showToast("❌ GitHub読込エラー: " + err.message);
+  }
+});
+
+// ====== 追跡開始 ======
+document.getElementById("startBtn").addEventListener("click", () => {
   if (watchId) {
     navigator.geolocation.clearWatch(watchId);
     watchId = null;
     showToast("追跡停止しました");
+    document.getElementById("status").textContent = "停止中";
+    speak("追跡を停止しました");
     return;
   }
-  showToast("追跡開始しました");
-  watchId = navigator.geolocation.watchPosition(
-    (pos) => {
-      const lat = pos.coords.latitude;
-      const lon = pos.coords.longitude;
-      if (!userMarker) {
-        userMarker = L.circleMarker([lat, lon], {
-          radius: 8, color: "red", fillColor: "#f03", fillOpacity: 0.9
-        }).addTo(map);
-      } else {
-        userMarker.setLatLng([lat, lon]);
-      }
-      if (document.getElementById("keepCentered").checked) {
-        map.setView([lat, lon]);
-      }
-    },
-    (err) => {
-      showToast("GPS取得エラー: " + err.message);
-    },
-    { enableHighAccuracy: true }
-  );
+
+  showToast("追跡を開始します");
+  speak("評価を開始します");
+  document.getElementById("status").textContent = "評価中";
+
+  watchId = navigator.geolocation.watchPosition((pos) => {
+    const lat = pos.coords.latitude;
+    const lon = pos.coords.longitude;
+    if (!userMarker) {
+      userMarker = L.circleMarker([lat, lon], {
+        radius: 8, color: "red", fillColor: "#f03", fillOpacity: 0.9
+      }).addTo(map);
+    } else {
+      userMarker.setLatLng([lat, lon]);
+    }
+  }, (err) => {
+    showToast("GPSエラー: " + err.message);
+  }, { enableHighAccuracy: true });
 });
 
-// ==================== 現在地へ移動 ====================
-document.getElementById("recenter").addEventListener("click", () => {
-  if (userMarker) {
-    map.setView(userMarker.getLatLng(), 17);
-    showToast("現在地へ移動しました");
-  } else {
-    showToast("まだ位置情報が取得されていません");
-  }
+// ====== 音声テスト ======
+document.getElementById("voiceTestBtn").addEventListener("click", () => {
+  speak("音声案内テストです。評価ポイントまでの案内を開始します。");
+  showToast("音声テストを再生しました");
+});
+
+// ====== メニュー閉じる ======
+document.getElementById("closeMenuBtn").addEventListener("click", () => {
+  document.getElementById("menu").style.display = "none";
+  showToast("メニューを閉じました");
 });
 </script>
 </body>
