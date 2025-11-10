@@ -89,7 +89,7 @@ function calcDistance(lat1,lon1,lat2,lon2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// ===== GitHubルート =====
+// ===== ルート選択 =====
 const routes=[
   "data/ルートTest.kmz",
   "data/Final_国内DPコース評価ポイント付き_251007_v10.kmz"
@@ -109,39 +109,51 @@ async function loadKmzFromGithub(url){
   const zip=await JSZip.loadAsync(blob);
   const kmlFile=Object.keys(zip.files).find(k=>k.endsWith(".kml"));
   const kmlText=await zip.file(kmlFile).async("string");
-  const kmlDom=new DOMParser().parseFromString(kmlText,"text/xml");
-  const geojson=toGeoJSON.kml(kmlDom);
+  const parser=new DOMParser();
+  const kmlDom=parser.parseFromString(kmlText,"text/xml");
 
-  if(routeLine){ map.removeLayer(routeLine); }
+  // ✅ 「評価ポイント」フォルダを優先的に抽出
+  const folders=[...kmlDom.getElementsByTagName("Folder")];
+  const evalFolder=folders.find(f=>{
+    const name=f.getElementsByTagName("name")[0]?.textContent ?? "";
+    return name.includes("評価ポイント");
+  });
+
+  const placemarks=evalFolder
+    ? [...evalFolder.getElementsByTagName("Placemark")]
+    : [...kmlDom.getElementsByTagName("Placemark")];
+
+  if(routeLine) map.removeLayer(routeLine);
   currentPoints.forEach(p=>map.removeLayer(p.marker));
   currentPoints=[];
 
-  geojson.features.forEach(f=>{
-    if(f.geometry.type==="LineString"){
-      routeLine=L.polyline(f.geometry.coordinates.map(c=>[c[1],c[0]]),{color:"orange",weight:5}).addTo(map);
-    }
-    // ★ 評価ポイントのみ抽出
-    else if(f.geometry.type==="Point"){
-      const [lon,lat]=f.geometry.coordinates;
-      const name=f.properties.name?.trim()||"";
-      const desc=f.properties.description?.trim()||"";
+  // 🔵 評価ポイントのプロット
+  placemarks.forEach(pm=>{
+    const name=pm.getElementsByTagName("name")[0]?.textContent?.trim() ?? "";
+    const desc=pm.getElementsByTagName("description")[0]?.textContent?.trim() ?? "";
+    const coords=pm.getElementsByTagName("coordinates")[0]?.textContent?.trim();
+    if(!coords) return;
 
-      // ★ ルート案内ピン除外条件
-      // ① descriptionが存在しない or 空文字
-      // ② nameが「A」「B」「ポイント」「分岐」などで始まる
-      const isRoutePoint = (
-        !desc ||
-        /^(A|B|C|D|E|分岐|ポイント|案内|経路)/.test(name)
-      );
-      if(isRoutePoint) return; // ★スキップ
-
-      // ★評価ポイントとして登録
-      const m=L.circleMarker([lat,lon],{radius:8,color:"black",fillColor:"blue",fillOpacity:0.9}).addTo(map);
-      currentPoints.push({lat,lng:lon,name,desc,marker:m,notified:false});
-    }
+    const [lon,lat]=coords.split(",").map(Number);
+    const m=L.circleMarker([lat,lon],{
+      radius:8,color:"black",fillColor:"blue",fillOpacity:0.9
+    }).addTo(map);
+    currentPoints.push({lat,lng:lon,name,desc,marker:m,notified:false});
   });
 
-  if(routeLine){ map.fitBounds(routeLine.getBounds()); }
+  // 🟠 ルート線(LineString)の描画（通知対象外）
+  const lines=[...kmlDom.getElementsByTagName("LineString")];
+  lines.forEach(line=>{
+    const coords=line.getElementsByTagName("coordinates")[0]?.textContent?.trim() ?? "";
+    if(!coords) return;
+    const latlngs=coords.split(/\s+/).map(c=>{
+      const [lon,lat]=c.split(",").map(Number);
+      return [lat,lon];
+    });
+    routeLine=L.polyline(latlngs,{color:"orange",weight:5}).addTo(map);
+  });
+
+  if(routeLine) map.fitBounds(routeLine.getBounds());
   showToast("ルート読込完了");
 }
 loadKmzFromGithub(sel.value);
@@ -197,7 +209,7 @@ document.getElementById("startBtn").addEventListener("click",async()=>{
     }
   });
 
-  // ===== 位置監視 =====
+  // ===== GPS追跡 =====
   watchId=navigator.geolocation.watchPosition(async pos=>{
     const lat=pos.coords.latitude, lon=pos.coords.longitude;
 
