@@ -30,7 +30,6 @@
   #startBtn { background-color: #0078D7; color: white; }
   #voiceTestBtn { background-color: #00B050; color: white; }
   #closeMenuBtn { background-color: #888; color: white; }
-
   #status { font-weight: bold; margin-top: 8px; }
 
   #toast {
@@ -117,22 +116,34 @@ async function loadKMZ(url){
   if(routeLayer) map.removeLayer(routeLayer);
   if(pointLayer) map.removeLayer(pointLayer);
 
+  // ルート線
   routeLayer = L.geoJSON(geojson, { color:"orange", weight:4 }).addTo(map);
 
+  // 評価ポイント
   const points = geojson.features.filter(f=>f.geometry.type==="Point");
   currentPoints = points.map(p=>{
     const name = p.properties.name || "ポイント";
+    const desc = p.properties.description || ""; // ← メモを取得
     const [lng,lat] = p.geometry.coordinates;
-    return { name, lat, lng, notified:false };
+    return { name, desc, lat, lng, notified:false };
   });
 
+  // ポイント表示
   pointLayer = L.layerGroup(currentPoints.map(p=>{
-    const html = `<div style="text-align:center;">
-                    <div style="background:white;border:2px solid black;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;color:blue;font-size:12px;">
-                      ${p.name.substring(0,2)}
-                    </div>
-                  </div>`;
-    const icon = L.divIcon({ html, className:"" });
+    const html = `
+      <div style="
+        background:white;
+        border:2px solid black;
+        border-radius:20px;
+        padding:2px 8px;
+        color:blue;
+        font-weight:bold;
+        font-size:13px;
+        text-align:center;
+        white-space:nowrap;">
+        ${p.name}
+      </div>`;
+    const icon = L.divIcon({ html, className:"", iconAnchor:[20, 20] });
     return L.marker([p.lat,p.lng],{icon});
   })).addTo(map);
 
@@ -195,7 +206,8 @@ document.getElementById("startBtn").addEventListener("click",()=>{
     if(nearby.length>0){
       setTimeout(()=>{
         for(const np of nearby){
-          speak(`${np.name} です`);
+          const message = np.desc ? `${np.name}、${np.desc}です` : `${np.name}です`;
+          speak(message);
           showToast(`📍 ${np.name}（約${Math.round(np.dist)}m）`);
           np.notified=true;
         }
@@ -221,7 +233,8 @@ document.getElementById("startBtn").addEventListener("click",()=>{
       if(!p.notified){
         const dist=calcDistance(lat,lon,p.lat,p.lng);
         if(dist<=notifyDistance){
-          speak(`${p.name} です`);
+          const message = p.desc ? `${p.name}、${p.desc}です` : `${p.name}です`;
+          speak(message);
           showToast(`📍 ${p.name}（約${Math.round(dist)}m）`);
           p.notified=true;
         }else{
