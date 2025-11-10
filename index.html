@@ -15,54 +15,40 @@
   #map { width: 100%; height: 100%; }
 
   #menu {
-    position: absolute;
-    top: 10px; left: 10px;
+    position: absolute; top: 10px; left: 10px;
     background: rgba(255, 255, 255, 0.95);
     padding: 10px;
     border-radius: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     z-index: 9999;
   }
+  h3 { margin-top: 0; }
 
   #toast {
-    position: fixed;
-    bottom: 80px; left: 50%;
+    position: fixed; bottom: 80px; left: 50%;
     transform: translateX(-50%);
-    background: rgba(0, 0, 0, 0.8);
-    color: white;
-    padding: 10px 16px;
-    border-radius: 10px;
-    display: none;
-    z-index: 9999;
-    font-size: 14px;
-  }
-
-  #status {
-    font-weight: bold;
-    margin-top: 8px;
+    background: rgba(0,0,0,0.8); color: white;
+    padding: 10px 16px; border-radius: 10px;
+    display: none; z-index: 9999; font-size: 14px;
   }
 
   button {
-    margin-top: 5px;
-    padding: 8px 12px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
+    margin-top: 5px; padding: 8px 12px;
+    border: none; border-radius: 8px; cursor: pointer;
   }
-
   #startBtn { background-color: #0078D7; color: white; }
   #voiceTestBtn { background-color: #00B050; color: white; }
   #closeMenuBtn { background-color: #888; color: white; }
+  #status { font-weight: bold; margin-top: 8px; }
 </style>
 </head>
-
 <body>
 <div id="map"></div>
 
 <div id="menu">
   <h3>実車評価支援ツール</h3>
 
-  <!-- ✅ GitHubルート選択追加 -->
+  <!-- ✅ GitHubルート選択 -->
   <label for="githubSelect">GitHubルート選択：</label><br>
   <select id="githubSelect">
     <option value="">（選択してください）</option>
@@ -75,10 +61,12 @@
   </select>
 
   <br><br>
-
-  <!-- 既存のローカルファイル選択 -->
   <label for="file">ローカルファイル読み込み：</label><br>
   <input type="file" id="file" accept=".kmz">
+
+  <br><br>
+  <label for="notifyDistance">通知距離（m）：</label>
+  <input type="number" id="notifyDistance" value="120" min="10" step="10">
 
   <br><br>
   <button id="startBtn">追跡開始</button>
@@ -91,134 +79,165 @@
 <div id="toast"></div>
 
 <script>
-let map = L.map('map').setView([35.68, 139.76], 14);
+let map = L.map('map').setView([35.68,139.76],14);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19, attribution: '© OpenStreetMap'
 }).addTo(map);
 
 let routeLayer = null;
-let markerLayer = null;
+let pointLayer = null;
 let userMarker = null;
 let watchId = null;
+let currentPoints = [];
 
 // ====== トースト ======
-function showToast(msg, duration = 2500) {
+function showToast(msg, duration=2500){
   const toast = document.getElementById("toast");
   toast.textContent = msg;
   toast.style.display = "block";
-  setTimeout(() => toast.style.display = "none", duration);
+  setTimeout(()=>toast.style.display="none", duration);
 }
 
 // ====== 音声案内 ======
-function speak(text) {
+function speak(text){
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = "ja-JP";
-  utter.pitch = 1.0;
-  utter.rate = 1.0;
+  utter.pitch = 0.9;
+  utter.rate = 0.95;
   utter.volume = 1.0;
   speechSynthesis.cancel();
   speechSynthesis.speak(utter);
 }
 
-// ====== ファイル読込共通処理 ======
-async function loadKMZ(blob) {
-  try {
-    const zip = new JSZip();
-    const loaded = await zip.loadAsync(blob);
-    const kmlFile = Object.keys(loaded.files).find(f => f.endsWith(".kml"));
-    if (!kmlFile) throw new Error("KMLファイルが見つかりません");
+// ====== KMZファイル共通読込 ======
+async function loadKMZ(blob){
+  const zip = new JSZip();
+  const loaded = await zip.loadAsync(blob);
+  const kmlFile = Object.keys(loaded.files).find(f=>f.endsWith(".kml"));
+  const kmlText = await loaded.files[kmlFile].async("string");
+  const parser = new DOMParser();
+  const kmlDoc = parser.parseFromString(kmlText,"text/xml");
+  const geojson = toGeoJSON.kml(kmlDoc);
 
-    const kmlText = await loaded.files[kmlFile].async("string");
-    const parser = new DOMParser();
-    const kmlDoc = parser.parseFromString(kmlText, "text/xml");
-    const geojson = toGeoJSON.kml(kmlDoc);
+  if(routeLayer) map.removeLayer(routeLayer);
+  if(pointLayer) map.removeLayer(pointLayer);
 
-    if (routeLayer) map.removeLayer(routeLayer);
-    routeLayer = L.geoJSON(geojson, { color: "orange", weight: 4 }).addTo(map);
-    map.fitBounds(routeLayer.getBounds());
+  routeLayer = L.geoJSON(geojson, {
+    color:"orange", weight:4
+  }).addTo(map);
 
-    // 評価ポイント表示
-    if (markerLayer) map.removeLayer(markerLayer);
-    markerLayer = L.geoJSON(geojson, {
-      pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-        radius: 6, color: "blue", fillColor: "blue", fillOpacity: 0.8
-      }).bindPopup(f.properties.name || "ポイント")
-    }).addTo(map);
+  // 評価ポイント（Placemark）
+  const points = geojson.features.filter(f=>f.geometry.type==="Point");
+  currentPoints = points.map(p=>{
+    const name = p.properties.name || "ポイント";
+    const [lng,lat] = p.geometry.coordinates;
+    return { name, lat, lng, notified:false };
+  });
 
-    showToast("✅ ルートを読み込みました");
-    speak("ルートを読み込みました");
-    document.getElementById("status").textContent = "ルート読込完了";
-  } catch (err) {
-    console.error(err);
-    showToast("❌ KMZ読込エラー: " + err.message);
-  }
+  pointLayer = L.layerGroup(currentPoints.map(p=>{
+    const icon = L.divIcon({
+      html:`<div style="background:white;border:2px solid black;border-radius:12px;padding:2px 4px;color:blue;font-size:12px">${p.name}</div>`
+    });
+    return L.marker([p.lat,p.lng],{icon});
+  })).addTo(map);
+
+  map.fitBounds(routeLayer.getBounds());
+  showToast("✅ ルート読込完了");
+  speak("ルートを読み込みました");
+  document.getElementById("status").textContent = "ルート読込完了";
 }
 
-// ====== ローカルファイル読込 ======
-document.getElementById("file").addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  showToast("ローカルファイルを読み込み中...");
-  const blob = await file.arrayBuffer();
-  await loadKMZ(new Blob([blob]));
+// ====== ローカル読込 ======
+document.getElementById("file").addEventListener("change",async e=>{
+  const f=e.target.files[0];
+  if(!f)return;
+  showToast("ローカルファイル読み込み中...");
+  const buf=await f.arrayBuffer();
+  await loadKMZ(new Blob([buf]));
 });
 
-// ====== GitHubファイル読込 ======
-document.getElementById("githubSelect").addEventListener("change", async function() {
-  const url = this.value;
-  if (!url) return;
-  showToast("GitHubルートを読み込み中...");
-  document.getElementById("status").textContent = "ルート読込中...";
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("ファイル取得に失敗しました");
-    const blob = await res.blob();
+// ====== GitHub読込 ======
+document.getElementById("githubSelect").addEventListener("change",async function(){
+  const url=this.value;
+  if(!url)return;
+  showToast("GitHubルート読込中...");
+  document.getElementById("status").textContent="ルート読込中...";
+  try{
+    const res=await fetch(url);
+    if(!res.ok)throw new Error("ファイル取得に失敗しました");
+    const blob=await res.blob();
     await loadKMZ(blob);
-  } catch (err) {
-    console.error(err);
-    showToast("❌ GitHub読込エラー: " + err.message);
+  }catch(err){
+    showToast("❌ 読込エラー: "+err.message);
   }
 });
 
+// ====== 距離計算 ======
+function calcDistance(lat1,lon1,lat2,lon2){
+  const R=6371000;
+  const dLat=(lat2-lat1)*Math.PI/180;
+  const dLon=(lon2-lon1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+
+          Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*
+          Math.sin(dLon/2)**2;
+  return 2*R*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+
 // ====== 追跡開始 ======
-document.getElementById("startBtn").addEventListener("click", () => {
-  if (watchId) {
+document.getElementById("startBtn").addEventListener("click",()=>{
+  if(watchId){
     navigator.geolocation.clearWatch(watchId);
-    watchId = null;
+    watchId=null;
     showToast("追跡停止しました");
-    document.getElementById("status").textContent = "停止中";
+    document.getElementById("status").textContent="停止中";
     speak("追跡を停止しました");
     return;
   }
 
   showToast("追跡を開始します");
-  speak("評価を開始します");
-  document.getElementById("status").textContent = "評価中";
+  speak("まもなくスタートです。評価を開始します。");
+  document.getElementById("status").textContent="評価中";
 
-  watchId = navigator.geolocation.watchPosition((pos) => {
-    const lat = pos.coords.latitude;
-    const lon = pos.coords.longitude;
-    if (!userMarker) {
-      userMarker = L.circleMarker([lat, lon], {
-        radius: 8, color: "red", fillColor: "#f03", fillOpacity: 0.9
+  const notifyDistance=parseFloat(document.getElementById("notifyDistance").value||120);
+
+  watchId=navigator.geolocation.watchPosition(pos=>{
+    const lat=pos.coords.latitude;
+    const lon=pos.coords.longitude;
+
+    if(!userMarker){
+      userMarker=L.circleMarker([lat,lon],{
+        radius:8,color:"red",fillColor:"#f03",fillOpacity:0.9
       }).addTo(map);
-    } else {
-      userMarker.setLatLng([lat, lon]);
+    }else{
+      userMarker.setLatLng([lat,lon]);
     }
-  }, (err) => {
-    showToast("GPSエラー: " + err.message);
-  }, { enableHighAccuracy: true });
+
+    // 通知チェック
+    for(const p of currentPoints){
+      if(!p.notified){
+        const dist=calcDistance(lat,lon,p.lat,p.lng);
+        if(dist<=notifyDistance){
+          speak(`${p.name} です`);
+          showToast(`📍 ${p.name}（約${Math.round(dist)}m）`);
+          p.notified=true;
+        }
+      }
+    }
+
+  },err=>{
+    showToast("GPSエラー: "+err.message);
+  },{enableHighAccuracy:true});
 });
 
 // ====== 音声テスト ======
-document.getElementById("voiceTestBtn").addEventListener("click", () => {
+document.getElementById("voiceTestBtn").addEventListener("click",()=>{
   speak("音声案内テストです。評価ポイントまでの案内を開始します。");
   showToast("音声テストを再生しました");
 });
 
 // ====== メニュー閉じる ======
-document.getElementById("closeMenuBtn").addEventListener("click", () => {
-  document.getElementById("menu").style.display = "none";
+document.getElementById("closeMenuBtn").addEventListener("click",()=>{
+  document.getElementById("menu").style.display="none";
   showToast("メニューを閉じました");
 });
 </script>
