@@ -1,219 +1,215 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>実車評価支援ツール</title>
-
-<!-- Leaflet -->
-<link rel="stylesheet" href="leaflet.css" />
-<script src="leaflet.js"></script>
-
-<!-- togeojson & jszip -->
-<script src="togeojson.umd.js"></script>
-<script src="jszip.min.js"></script>
-
-<style>
-  html,body{height:100%;margin:0}
-  #map{position:fixed; inset:0; background:#f2f2f2;}
-  #panel{
-    position:fixed; left:10px; top:calc(10px + env(safe-area-inset-top));
-    z-index:1000; background:#fff; padding:10px 12px; border-radius:12px;
-    box-shadow:0 6px 24px rgba(0,0,0,.18);
-    font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;
-    min-width:300px; max-width:min(94vw,560px);
-  }
-  #panel h1{margin:0 0 8px;font-size:15px;font-weight:700}
-  .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:6px 0}
-  button{padding:10px 14px; min-height:40px; border-radius:12px; cursor:pointer; border:1px solid #ddd;}
-  #start{background:#16a34a;color:#fff;border-color:#16a34a}
-  #recenter{background:#0ea5e9;color:#fff;border-color:#0ea5e9}
-  #cp{background:#f59e0b;color:#fff;border-color:#f59e0b}
-  .counts{font-size:11px;color:#334155;background:#f1f5f9;border-radius:9999px;padding:2px 8px}
-  #toast{position:fixed; left:50%; bottom:calc(78px + env(safe-area-inset-bottom)); transform:translateX(-50%);
-    z-index:2000; display:none; max-width:min(92vw,560px); background:rgba(0,0,0,.85); color:#fff;
-    padding:10px 14px; border-radius:12px; box-shadow:0 6px 24px rgba(0,0,0,.35); font-size:14px}
-</style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>実車評価支援ツール</title>
+  <link rel="stylesheet" href="leaflet.css" />
+  <style>
+    html, body, #map {
+      height: 100%;
+      margin: 0;
+      padding: 0;
+    }
+    #control-panel {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      z-index: 1000;
+      background: white;
+      border-radius: 12px;
+      padding: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+      font-family: "Segoe UI", sans-serif;
+    }
+    #toast {
+      position: absolute;
+      bottom: 15px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.8);
+      color: white;
+      padding: 8px 14px;
+      border-radius: 8px;
+      display: none;
+      font-size: 14px;
+      z-index: 2000;
+    }
+  </style>
 </head>
 <body>
-<div id="map"></div>
+  <div id="map"></div>
+  <div id="control-panel">
+    <h3>実車評価支援ツール</h3>
+    <label>評価コース：</label>
+    <select id="fileSelect"></select><br /><br />
 
-<!-- 操作パネル -->
-<div id="panel">
-  <h1>実車評価支援ツール</h1>
+    <button onclick="startTracking()" style="background:#22c55e;color:white;">追跡開始</button>
+    <button onclick="moveToCurrent()" style="background:#0ea5e9;color:white;">現在地へ</button>
+    <button onclick="togglePoints()" style="background:#f59e0b;color:white;">チェックポイント</button><br /><br />
 
-  <div class="row">
-    <label for="datasetSelect">評価コース：</label>
-    <select id="datasetSelect" class="grow">
-      <option value="" disabled selected>（コースを選択）</option>
-    </select>
+    <label><input type="checkbox" id="keepCentered">自車を常に中心</label><br />
+    <label>向き：
+      <input type="radio" name="headingMode" value="north" checked> 北を上
+      <input type="radio" name="headingMode" value="track"> 進行方向を上
+    </label><br /><br />
+
+    <fieldset style="border:1px solid #ccc;padding:5px;border-radius:8px;">
+      <legend>音声案内設定</legend>
+      <label><input type="checkbox" id="voiceGuide" checked> 音声案内ON</label><br />
+      <label>案内距離(m)：<input type="number" id="voiceDistance" value="120" min="10" max="500" style="width:60px;"></label>
+    </fieldset>
   </div>
+  <div id="toast"></div>
 
-  <div class="row">
-    <button id="start">追跡開始</button>
-    <button id="recenter">現在地へ</button>
-    <button id="cp" disabled>チェックポイント</button>
-    <span id="counts" class="counts"></span>
-  </div>
+  <script src="leaflet.js"></script>
+  <script src="togeojson.umd.js"></script>
+  <script src="jszip.min.js"></script>
 
-  <div class="row">
-    <label><input type="checkbox" id="keepCentered" checked />自車を常に中心</label>
-    <label style="margin-left:10px">向き:</label>
-    <label><input type="radio" name="orient" value="north" checked />北を上</label>
-    <label><input type="radio" name="orient" value="course" />進行方向を上</label>
-  </div>
-</div>
+  <script>
+    let map, routeLayer, pointLayer, trackMarker, watchId;
+    let keepCentered = false;
+    let headingMode = 'north';
+    let announcedPoints = new Set();
 
-<div id="toast"></div>
+    function showToast(msg) {
+      const t = document.getElementById("toast");
+      t.innerText = msg;
+      t.style.display = "block";
+      setTimeout(() => t.style.display = "none", 2500);
+    }
 
-<script>
-/* -------------------------------
-   地図初期化
---------------------------------*/
-const map = L.map('map', { zoomControl: true }).setView([35.45, 139.39], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 18,
-  attribution: '© OpenStreetMap contributors'
-}).addTo(map);
+    async function initMap() {
+      map = L.map('map').setView([35.4, 139.3], 11);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 18,
+        attribution: '&copy; OpenStreetMap contributors'
+      }).addTo(map);
 
-let trackMarker = null;
-let routeLayer = null;
-let pointLayer = null;
-let watchId = null;
-let keepCentered = true;
+      document.getElementById("keepCentered").addEventListener("change", e => {
+        keepCentered = e.target.checked;
+      });
+      document.querySelectorAll('input[name="headingMode"]').forEach(r => {
+        r.addEventListener('change', e => headingMode = e.target.value);
+      });
 
-/* -------------------------------
-   KML/KMZ 読込処理
---------------------------------*/
-async function handleKMZFile(file) {
-  const ext = file.name.split('.').pop().toLowerCase();
-  if (ext === 'kmz') {
-    const zip = await JSZip.loadAsync(file);
-    const kmlFile = Object.keys(zip.files).find(f => f.endsWith('.kml'));
-    if (!kmlFile) throw new Error('KMLが含まれていません');
-    const kmlText = await zip.files[kmlFile].async('text');
-    loadKMLString(kmlText, file.name);
-  } else if (ext === 'kml') {
-    const text = await file.text();
-    loadKMLString(text, file.name);
-  } else {
-    alert('KML/KMZファイルを選択してください');
-  }
-}
+      await loadFileList();
+    }
 
-function loadKMLString(kmlText, name) {
-  const parser = new DOMParser();
-  const kmlDom = parser.parseFromString(kmlText, 'text/xml');
-  const geojson = toGeoJSON.kml(kmlDom);
+    async function loadFileList() {
+      const select = document.getElementById("fileSelect");
+      try {
+        const res = await fetch("data/filelist.json");
+        const files = await res.json();
+        select.innerHTML = files.map(f => `<option value="${f}">${f}</option>`).join("");
+        if (files.length > 0) loadKML(files[0]);
+        select.addEventListener("change", () => loadKML(select.value));
+      } catch (err) {
+        showToast("❌ ファイルリストの読込に失敗");
+      }
+    }
 
-  if (routeLayer) map.removeLayer(routeLayer);
-  if (pointLayer) map.removeLayer(pointLayer);
+    async function loadKML(filename) {
+      try {
+        const res = await fetch(`data/${filename}`);
+        const blob = await res.blob();
+        const zip = await JSZip.loadAsync(blob);
+        const kmlFile = Object.keys(zip.files).find(f => f.endsWith(".kml"));
+        const kmlText = await zip.files[kmlFile].async("text");
+        renderKML(kmlText, filename);
+      } catch (err) {
+        showToast("❌ KMLの読込に失敗");
+      }
+    }
 
-  routeLayer = L.geoJSON(geojson, {
-    style: { color: '#0ea5e9', weight: 4 }
-  }).addTo(map);
+    function renderKML(kmlText, name) {
+      const parser = new DOMParser();
+      const kmlDom = parser.parseFromString(kmlText, "text/xml");
+      const geojson = toGeoJSON.kml(kmlDom);
 
-  pointLayer = L.geoJSON(geojson, {
-    pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-      radius: 6, color: '#ef4444', fillColor: '#ef4444', fillOpacity: 0.9
-    }).bindPopup(f.properties.name || '(名称なし)')
-  }).addTo(map);
+      if (routeLayer) map.removeLayer(routeLayer);
+      if (pointLayer) map.removeLayer(pointLayer);
 
-  map.fitBounds(routeLayer.getBounds());
-  showToast(`✅ コース読込完了: ${name}`);
-}
+      routeLayer = L.geoJSON(geojson, {
+        filter: f => f.geometry.type === "LineString",
+        style: { color: "#0ea5e9", weight: 4 }
+      }).addTo(map);
 
-/* -------------------------------
-   現在地追跡
---------------------------------*/
-function startTracking() {
-  if (watchId) return;
-  if (!navigator.geolocation) {
-    alert('GPS未対応ブラウザです');
-    return;
-  }
+      pointLayer = L.geoJSON(geojson, {
+        filter: f => f.geometry.type === "Point",
+        pointToLayer: (f, latlng) => 
+          L.circleMarker(latlng, { radius: 6, color: "#ef4444", fillColor: "#ef4444", fillOpacity: 0.9 })
+            .bindPopup(f.properties.name || "(名称なし)")
+      }).addTo(map);
 
-  showToast('📡 追跡を開始しました');
-  watchId = navigator.geolocation.watchPosition(
-    (pos) => {
-      const lat = pos.coords.latitude;
-      const lng = pos.coords.longitude;
-      const latlng = [lat, lng];
+      map.fitBounds(routeLayer.getBounds());
+      announcedPoints.clear();
+      showToast(`✅ コース読込完了: ${name}`);
+    }
 
-      if (!trackMarker) {
-        trackMarker = L.marker(latlng).addTo(map);
+    function togglePoints() {
+      if (map.hasLayer(pointLayer)) {
+        map.removeLayer(pointLayer);
+        showToast("📍 チェックポイント非表示");
       } else {
-        trackMarker.setLatLng(latlng);
+        map.addLayer(pointLayer);
+        showToast("📍 チェックポイント表示");
+      }
+    }
+
+    function moveToCurrent() {
+      if (trackMarker) map.panTo(trackMarker.getLatLng());
+    }
+
+    function startTracking() {
+      if (watchId) return;
+      if (!navigator.geolocation) {
+        alert("GPS未対応ブラウザです");
+        return;
       }
 
-      if (keepCentered) map.setView(latlng);
-    },
-    (err) => {
-      alert('位置情報エラー: ' + err.message);
-    },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
-  );
-}
+      showToast("📡 追跡を開始しました");
+      watchId = navigator.geolocation.watchPosition(
+        pos => {
+          const lat = pos.coords.latitude;
+          const lng = pos.coords.longitude;
+          const latlng = [lat, lng];
 
-document.getElementById('start').addEventListener('click', startTracking);
-document.getElementById('recenter').addEventListener('click', () => {
-  if (trackMarker) map.setView(trackMarker.getLatLng());
-});
-document.getElementById('keepCentered').addEventListener('change', e => keepCentered = e.target.checked);
+          if (!trackMarker) {
+            trackMarker = L.marker(latlng, { rotationAngle: 0 }).addTo(map);
+          } else {
+            trackMarker.setLatLng(latlng);
+          }
 
-/* -------------------------------
-   トースト表示
---------------------------------*/
-function showToast(msg) {
-  const toast = document.getElementById('toast');
-  toast.textContent = msg;
-  toast.style.display = 'block';
-  setTimeout(() => toast.style.display = 'none', 2500);
-}
+          if (keepCentered) map.setView(latlng);
 
-/* -------------------------------
-   KMZリスト自動読込
---------------------------------*/
-const dataPath = 'data/';
-const selectEl = document.getElementById('datasetSelect');
+          // 音声案内
+          const voiceEnabled = document.getElementById("voiceGuide").checked;
+          const distanceThreshold = parseInt(document.getElementById("voiceDistance").value) || 120;
 
-async function listKMZFiles() {
-  try {
-    // filelist.jsonからKMZリストを取得
-    const files = await fetch(`${dataPath}filelist.json`).then(r => r.json());
+          if (voiceEnabled && pointLayer) {
+            pointLayer.eachLayer(layer => {
+              const dist = map.distance(latlng, layer.getLatLng());
+              if (dist < distanceThreshold && !announcedPoints.has(layer._leaflet_id)) {
+                const name = layer.feature?.properties?.name || "チェックポイント";
+                const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
+                utter.lang = "ja-JP";
+                speechSynthesis.speak(utter);
+                announcedPoints.add(layer._leaflet_id);
+              }
+            });
+          }
 
-    selectEl.innerHTML = '<option value="" disabled selected>（コースを選択）</option>';
-    files.forEach(f => {
-      const opt = document.createElement('option');
-      opt.value = f;
-      opt.textContent = f.replace('.kmz', '');
-      selectEl.appendChild(opt);
-    });
+          if (headingMode === "track" && pos.coords.heading !== null) {
+            map.setBearing(pos.coords.heading);
+          }
+        },
+        err => alert("位置情報エラー: " + err.message),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
+    }
 
-    // 選択時の読込処理
-    selectEl.addEventListener('change', () => {
-      const fileName = selectEl.value;
-      loadKMZ(fileName);
-    });
-  } catch (err) {
-    console.error('KMZリスト取得エラー:', err);
-  }
-}
-
-async function loadKMZ(filename) {
-  const fileUrl = `${dataPath}${filename}`;
-  try {
-    const res = await fetch(fileUrl);
-    const blob = await res.blob();
-    const file = new File([blob], filename);
-    await handleKMZFile(file);
-  } catch (err) {
-    showToast('KMZ読込エラー: ' + err.message);
-  }
-}
-
-// 起動時にKMZリストを読込
-window.addEventListener('DOMContentLoaded', listKMZFiles);
-</script>
+    window.onload = initMap;
+  </script>
 </body>
 </html>
