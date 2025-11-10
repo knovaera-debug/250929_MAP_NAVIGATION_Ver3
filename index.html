@@ -1,85 +1,97 @@
-function startTracking() {
-  const btn = event.target;
+    ...
+    <!-- LeafletJS 読み込み -->
+    <script src="leaflet.js"></script>
+    <script src="jszip.min.js"></script>
+    <script src="togeojson.umd.js"></script>
 
-  // 停止状態なら開始
-  if (!watchId) {
-    if (!navigator.geolocation) {
-      alert("GPS未対応ブラウザです");
-      return;
-    }
+    <!-- ★ ここに新しい startTracking 関数を貼り付ける -->
+    <script>
+    function startTracking() {
+      const btn = event.target;
 
-    // 🔊 音声＋トーストで開始を明確化
-    const utter = new SpeechSynthesisUtterance("評価を開始します。");
-    utter.lang = "ja-JP";
-    if (kyokoVoice) utter.voice = kyokoVoice;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(utter);
-
-    showToast("📡 追跡を開始しました");
-    btn.textContent = "追跡停止";
-    btn.style.background = "#ef4444"; // 赤に変更
-
-    gpsInitialized = true;
-
-    watchId = navigator.geolocation.watchPosition(
-      pos => {
-        const lat = pos.coords.latitude;
-        const lng = pos.coords.longitude;
-        const heading = pos.coords.heading;
-        const latlng = [lat, lng];
-
-        // 自車マーカー更新
-        if (!trackMarker) {
-          trackMarker = L.marker(latlng, { icon: carIcon, title: "現在地" }).addTo(map);
-        } else {
-          trackMarker.setLatLng(latlng);
+      // 停止状態なら開始
+      if (!watchId) {
+        if (!navigator.geolocation) {
+          alert("GPS未対応ブラウザです");
+          return;
         }
 
-        // 向きと地図追従
-        if (heading !== null && !isNaN(heading)) {
-          const carElem = document.getElementById("carMarker");
-          if (carElem) carElem.style.transform = `rotate(${heading}deg)`;
-          if (headingMode === "track") map.setBearing?.(heading);
-        }
-        if (keepCentered) map.setView(latlng);
+        // 🔊 音声＋トーストで開始を明確化
+        const utter = new SpeechSynthesisUtterance("評価を開始します。");
+        utter.lang = "ja-JP";
+        if (kyokoVoice) utter.voice = kyokoVoice;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utter);
 
-        // 音声案内
-        const voiceEnabled = document.getElementById("voiceGuide").checked;
-        const distanceThreshold = parseInt(document.getElementById("voiceDistance").value) || 120;
-        const now = Date.now();
+        showToast("📡 追跡を開始しました");
+        btn.textContent = "追跡停止";
+        btn.style.background = "#ef4444"; // 赤
 
-        if (voiceEnabled && pointLayer) {
-          pointLayer.eachLayer(layer => {
-            const dist = map.distance(latlng, layer.getLatLng());
-            const lastAnnounced = announcedPoints.get(layer._leaflet_id);
-            if (dist < distanceThreshold && (!lastAnnounced || now - lastAnnounced > 180000)) {
-              const name = layer.feature?.properties?.name || "チェックポイント";
-              const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
-              utter.lang = "ja-JP";
-              if (kyokoVoice) utter.voice = kyokoVoice;
-              speechSynthesis.cancel();
-              speechSynthesis.speak(utter);
-              announcedPoints.set(layer._leaflet_id, now);
+        gpsInitialized = true;
+
+        watchId = navigator.geolocation.watchPosition(
+          pos => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            const heading = pos.coords.heading;
+            const latlng = [lat, lng];
+
+            // 自車マーカー更新
+            if (!trackMarker) {
+              trackMarker = L.marker(latlng, { icon: carIcon, title: "現在地" }).addTo(map);
+            } else {
+              trackMarker.setLatLng(latlng);
             }
-          });
-        }
-      },
-      err => alert("位置情報エラー: " + err.message),
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
-    );
 
-  // すでに追跡中なら停止
-  } else {
-    navigator.geolocation.clearWatch(watchId);
-    watchId = null;
-    btn.textContent = "追跡開始";
-    btn.style.background = "#22c55e"; // 緑に戻す
-    showToast("⏹ 追跡を停止しました");
+            // 向きと追従
+            if (heading !== null && !isNaN(heading)) {
+              const carElem = document.getElementById("carMarker");
+              if (carElem) carElem.style.transform = `rotate(${heading}deg)`;
+              if (headingMode === "track") map.setBearing?.(heading);
+            }
+            if (keepCentered) map.setView(latlng);
 
-    const utter = new SpeechSynthesisUtterance("評価を終了します。");
-    utter.lang = "ja-JP";
-    if (kyokoVoice) utter.voice = kyokoVoice;
-    speechSynthesis.cancel();
-    speechSynthesis.speak(utter);
-  }
-}
+            // 音声案内
+            const voiceEnabled = document.getElementById("voiceGuide").checked;
+            const distanceThreshold = parseInt(document.getElementById("voiceDistance").value) || 120;
+            const now = Date.now();
+
+            if (voiceEnabled && pointLayer) {
+              pointLayer.eachLayer(layer => {
+                const dist = map.distance(latlng, layer.getLatLng());
+                const lastAnnounced = announcedPoints.get(layer._leaflet_id);
+                if (dist < distanceThreshold && (!lastAnnounced || now - lastAnnounced > 180000)) {
+                  const name = layer.feature?.properties?.name || "チェックポイント";
+                  const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
+                  utter.lang = "ja-JP";
+                  if (kyokoVoice) utter.voice = kyokoVoice;
+                  speechSynthesis.cancel();
+                  speechSynthesis.speak(utter);
+                  announcedPoints.set(layer._leaflet_id, now);
+                }
+              });
+            }
+          },
+          err => alert("位置情報エラー: " + err.message),
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+        );
+
+      // 追跡停止処理
+      } else {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        btn.textContent = "追跡開始";
+        btn.style.background = "#22c55e"; // 緑
+        showToast("⏹ 追跡を停止しました");
+
+        const utter = new SpeechSynthesisUtterance("評価を終了します。");
+        utter.lang = "ja-JP";
+        if (kyokoVoice) utter.voice = kyokoVoice;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(utter);
+      }
+    }
+    </script>
+
+  </body>
+</html>
