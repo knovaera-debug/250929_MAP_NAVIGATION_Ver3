@@ -4,7 +4,6 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>実車評価支援ツール</title>
-  <!-- Leaflet のCSS -->
   <link rel="stylesheet" href="leaflet.css" />
   <style>
     html, body { height: 100%; margin: 0; padding: 0; }
@@ -15,11 +14,11 @@
       top: 10px;
       left: 10px;
       z-index: 1000;
-      background: white;
+      background: rgba(255,255,255,0.95);
       border-radius: 10px;
       padding: 10px;
       box-shadow: 0 0 5px rgba(0,0,0,0.3);
-      width: 350px;
+      width: 320px;
       font-size: 14px;
     }
     .control-box h2 {
@@ -46,7 +45,6 @@
 <body>
   <div id="map"></div>
 
-  <!-- 操作パネル -->
   <div class="control-box">
     <h2>実車評価支援ツール</h2>
     <div>
@@ -75,67 +73,77 @@
     </div>
   </div>
 
-  <!-- 必要なライブラリ -->
   <script src="leaflet.js"></script>
   <script src="jszip.min.js"></script>
   <script src="togeojson.umd.js"></script>
 
   <script>
-    // ===== グローバル変数 =====
-    let map;
-    let trackMarker = null;
-    let pointLayer = null;
-    let watchId = null;
+    let map, trackMarker, pointLayer, watchId;
     let kyokoVoice = null;
-    let announcedPoints = new Map();      // ポイントごとの最終案内時刻
-    let firstPositionHandled = false;     // 最初の位置で一番近いポイントを読む
+    let announcedPoints = new Map();
+    let firstPositionHandled = false;
     let headingMode = "north";
-    const REPEAT_BLOCK_MS = 180000;       // 3分で再案内を許可
+    const REPEAT_BLOCK_MS = 180000;
 
-    // 自車マーカーアイコン（外部URLでもOK。自前のpngにしてもよい）
-    const carIcon = L.icon({
-      iconUrl: "https://cdn-icons-png.flaticon.com/512/854/854894.png",
-      iconSize: [30, 30],
-      iconAnchor: [15, 15]
-    });
+    // --- 音声制御キュー ---
+    let isSpeaking = false;
+    let speakQueue = [];
 
-    // ===== 初期化 =====
+    function speakQueued(text) {
+      if (!kyokoVoice || !text) return;
+      speakQueue.push(text);
+      if (!isSpeaking) processQueue();
+    }
+
+    function processQueue() {
+      if (speakQueue.length === 0) { isSpeaking = false; return; }
+      isSpeaking = true;
+      const text = speakQueue.shift();
+      const u = new SpeechSynthesisUtterance(text);
+      u.voice = kyokoVoice;
+      u.lang = "ja-JP";
+      u.rate = 0.9;    // ゆっくり
+      u.pitch = 0.65;  // 抑揚を抑える
+      u.volume = 1.0;
+      u.onend = () => { isSpeaking = false; processQueue(); };
+      speechSynthesis.speak(u);
+    }
+
+    // --- 地図初期化 ---
     window.onload = async function() {
-      // 地図本体
-      map = L.map("map").setView([35.4, 139.4], 11);
+      map = L.map("map").setView([35.4, 139.4], 13);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: '&copy; OpenStreetMap contributors'
       }).addTo(map);
 
-      // 音声（きょうこ）を取得
+      // 音声初期化
       speechSynthesis.onvoiceschanged = () => {
         kyokoVoice = speechSynthesis.getVoices().find(v => v.name.includes("Kyoko")) || null;
       };
 
-      // コース一覧をGitHub上の data/filelist.json から読込
-      const res = await fetch("data/filelist.json");
-      const files = await res.json();
-      const sel = document.getElementById("courseSelect");
-      files.forEach(f => {
-        const opt = document.createElement("option");
-        opt.value = f;
-        opt.textContent = f;
-        sel.appendChild(opt);
-      });
-      sel.addEventListener("change", () => loadKMZ(sel.value));
-      if (files.length > 0) {
-        loadKMZ(files[0]);
+      // コース読込
+      try {
+        const res = await fetch("data/filelist.json");
+        const files = await res.json();
+        const sel = document.getElementById("courseSelect");
+        files.forEach(f => {
+          const opt = document.createElement("option");
+          opt.value = f;
+          opt.textContent = f;
+          sel.appendChild(opt);
+        });
+        sel.addEventListener("change", () => loadKMZ(sel.value));
+        if (files.length > 0) loadKMZ(files[0]);
+      } catch (e) {
+        console.error("ファイルリストの取得に失敗:", e);
       }
 
-      // 向きラジオボタン
       document.querySelectorAll("input[name='headingMode']").forEach(r => {
-        r.addEventListener("change", e => {
-          headingMode = e.target.value;
-        });
+        r.addEventListener("change", e => headingMode = e.target.value);
       });
     };
 
-    // ===== KMZ読み込みと表示 =====
+    // --- KMZ 読み込み ---
     async function loadKMZ(filename) {
       if (!filename) return;
       if (pointLayer) map.removeLayer(pointLayer);
@@ -143,195 +151,124 @@
       const res = await fetch(`data/${filename}`);
       const blob = await res.blob();
       const zip = await JSZip.loadAsync(blob);
-      const kmlFile = Object.keys(zip.files).find(k => k.endsWith(".kml"));
+      const kmlFile = Object.keys(zip.files).find(name => name.endsWith(".kml"));
       const kmlText = await zip.file(kmlFile).async("text");
+      const kml = new DOMParser().parseFromString(kmlText, "text/xml");
+      const geojson = toGeoJSON.kml(kml);
 
-      const dom = new DOMParser().parseFromString(kmlText, "text/xml");
-      const geojson = toGeoJSON.kml(dom);
-
-      // ポイント
       pointLayer = L.geoJSON(geojson, {
-        filter: f => f.geometry.type === "Point",
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-          radius: 6,
-          fillColor: "red",
-          color: "black",    // 黒ふち
-          weight: 2,         // 太く
-          fillOpacity: 0.9
-        }).bindPopup(f.properties.name || "チェックポイント")
+          radius: 7, color: "black", weight: 2, fillColor: "red", fillOpacity: 0.8
+        }),
+        onEachFeature: (f, layer) => {
+          if (f.properties && f.properties.name) layer.bindPopup(f.properties.name);
+        }
       }).addTo(map);
 
-      // ルート（LineString）がある場合も表示
-      const routeLayer = L.geoJSON(geojson, {
-        filter: f => f.geometry.type === "LineString",
-        style: { color: "#0ea5e9", weight: 4 }
-      }).addTo(map);
-
-      map.fitBounds(routeLayer.getBounds());
+      map.fitBounds(pointLayer.getBounds());
       announcedPoints.clear();
       firstPositionHandled = false;
     }
 
-    // ===== トースト（中央に大きく） =====
-    function showToast(message) {
-      const toast = document.createElement("div");
-      toast.textContent = message;
-      Object.assign(toast.style, {
-        position: "fixed",
-        top: "50%",
-        left: "50%",
-        transform: "translate(-50%, -50%)",
-        background: "rgba(0,0,0,0.8)",
-        color: "#fff",
-        padding: "20px 30px",
-        borderRadius: "25px",
-        fontSize: "1.2rem",
-        fontWeight: "bold",
-        boxShadow: "0 0 10px rgba(0,0,0,0.3)",
-        zIndex: "9999",
-        opacity: "0",
-        transition: "opacity 0.5s ease"
-      });
-      document.body.appendChild(toast);
-      requestAnimationFrame(() => toast.style.opacity = "1");
-      setTimeout(() => {
-        toast.style.opacity = "0";
-        setTimeout(() => toast.remove(), 500);
-      }, 2500);
-    }
-
-    // ===== 共通の音声再生（トーン調整） =====
-    function speakText(text) {
-      const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = "ja-JP";
-      utter.pitch = 0.8;        // ←トーンを少し低めに
-      utter.rate = 1.0;
-      if (kyokoVoice) utter.voice = kyokoVoice;
-      speechSynthesis.speak(utter);
-    }
-
-    // ===== 音声テストボタン =====
-    function voiceTest() {
-      speechSynthesis.cancel();
-      speakText("音声テストです。きょうこの声で案内します。");
-      showToast("🔊 音声テストを再生しました");
-    }
-
-    // ===== 追跡開始/停止 =====
-    function startTracking(ev) {
-      const btn = ev.target;
-
-      // 開始
-      if (!watchId) {
-        if (!navigator.geolocation) {
-          alert("GPS未対応ブラウザです");
-          return;
-        }
-        // ここでだけ cancel して確実に開始音声を出す
-        speechSynthesis.cancel();
-        speakText("評価を開始します。");
-        showToast("📡 追跡を開始しました");
-        btn.textContent = "追跡停止";
-        btn.style.background = "#ef4444";
-
-        watchId = navigator.geolocation.watchPosition(
-          positionHandler,
-          err => alert("位置情報エラー: " + err.message),
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
-        );
-
-      // 停止
-      } else {
+    // --- 追跡開始 ---
+    function startTracking() {
+      if (watchId) {
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
-        speakText("評価を終了します。");
-        showToast("⏹ 追跡を停止しました");
-        btn.textContent = "追跡開始";
-        btn.style.background = "#22c55e";
       }
+
+      if (!navigator.geolocation) {
+        alert("GPSが利用できません");
+        return;
+      }
+
+      speakQueued("追跡を開始しました。");
+      watchId = navigator.geolocation.watchPosition(
+        pos => updatePosition(pos.coords.latitude, pos.coords.longitude),
+        err => console.error(err),
+        { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+      );
     }
 
-    // ===== 位置更新ごとの処理 =====
-    function positionHandler(pos) {
-      const latlng = [pos.coords.latitude, pos.coords.longitude];
-      const heading = pos.coords.heading;
-
-      // 現在地マーカー
+    // --- 現在位置更新 ---
+    function updatePosition(lat, lng) {
+      const latlng = [lat, lng];
       if (!trackMarker) {
-        trackMarker = L.marker(latlng, { icon: carIcon, title: "現在地" }).addTo(map);
+        trackMarker = L.marker(latlng, { icon: L.icon({
+          iconUrl: "https://cdn-icons-png.flaticon.com/512/854/854894.png",
+          iconSize: [30,30], iconAnchor: [15,15]
+        })}).addTo(map);
       } else {
         trackMarker.setLatLng(latlng);
       }
 
-      // 進行方向を上
-      if (headingMode === "track" && heading !== null && !isNaN(heading)) {
-        map.setBearing?.(heading);
-      }
+      const keepCenter = document.getElementById("keepCenter").checked;
+      if (keepCenter) map.panTo(latlng);
 
-      // 中心にする
-      if (document.getElementById("keepCenter").checked) {
-        map.setView(latlng);
-      }
-
-      // 初回だけ近いポイントを読む
       if (!firstPositionHandled) {
-        announceNearestIfClose(latlng);
         firstPositionHandled = true;
+        const nearest = findNearestPoint(lat, lng);
+        if (nearest) {
+          speakQueued(`まもなく ${nearest.name} です。`);
+        }
       }
 
-      // 以降は通常の近接案内
-      doProximityVoice(latlng);
+      checkNearbyPoints(lat, lng);
     }
 
-    // ===== 現在地へ =====
-    function goToCurrent() {
-      if (trackMarker) map.setView(trackMarker.getLatLng(), 16);
+    // --- 最寄りポイント判定 ---
+    function findNearestPoint(lat, lng) {
+      if (!pointLayer) return null;
+      let minDist = Infinity, nearest = null;
+      pointLayer.eachLayer(layer => {
+        const p = layer.getLatLng();
+        const d = map.distance([lat, lng], p);
+        if (d < minDist) {
+          minDist = d;
+          nearest = { name: layer.feature.properties.name, dist: d };
+        }
+      });
+      return nearest;
     }
 
-    // ===== チェックポイント表示 =====
-    function showCheckpoints() {
-      if (pointLayer) map.fitBounds(pointLayer.getBounds());
-    }
-
-    // ===== 初回に一番近いポイントを読む =====
-    function announceNearestIfClose(latlng) {
+    // --- 近距離案内 ---
+    function checkNearbyPoints(lat, lng) {
       if (!pointLayer) return;
-      const threshold = parseInt(document.getElementById("voiceDistance").value) || 120;
-      let nearestLayer = null;
-      let nearestDist = Infinity;
+      const voiceDist = parseFloat(document.getElementById("voiceDistance").value);
+      const guideOn = document.getElementById("voiceGuide").checked;
+      if (!guideOn) return;
 
       pointLayer.eachLayer(layer => {
-        const d = map.distance(latlng, layer.getLatLng());
-        if (d < nearestDist) {
-          nearestDist = d;
-          nearestLayer = layer;
+        const p = layer.getLatLng();
+        const d = map.distance([lat, lng], p);
+        if (d <= voiceDist) {
+          const name = layer.feature.properties.name;
+          const last = announcedPoints.get(name);
+          const now = Date.now();
+          if (!last || now - last > REPEAT_BLOCK_MS) {
+            announcedPoints.set(name, now);
+            speakQueued(`まもなく ${name} です。`);
+          }
         }
       });
-
-      if (nearestLayer && nearestDist <= threshold) {
-        const name = nearestLayer.feature?.properties?.name || "スタート地点";
-        speakText(`まもなく ${name}`);
-        announcedPoints.set(nearestLayer._leaflet_id, Date.now());
-      }
     }
 
-    // ===== 通常の近接案内 =====
-    function doProximityVoice(latlng) {
-      const voiceEnabled = document.getElementById("voiceGuide").checked;
-      if (!voiceEnabled || !pointLayer) return;
+    // --- 現在地へ ---
+    function goToCurrent() {
+      if (trackMarker) map.panTo(trackMarker.getLatLng());
+    }
 
-      const threshold = parseInt(document.getElementById("voiceDistance").value) || 120;
-      const now = Date.now();
+    // --- チェックポイント一覧 ---
+    function showCheckpoints() {
+      if (!pointLayer) return;
+      let list = [];
+      pointLayer.eachLayer(l => list.push(l.feature.properties.name));
+      alert("チェックポイント:\n" + list.join("\n"));
+    }
 
-      pointLayer.eachLayer(layer => {
-        const dist = map.distance(latlng, layer.getLatLng());
-        const last = announcedPoints.get(layer._leaflet_id);
-        if (dist < threshold && (!last || now - last > REPEAT_BLOCK_MS)) {
-          const name = layer.feature?.properties?.name || "チェックポイント";
-          speakText(`まもなく ${name}`);
-          announcedPoints.set(layer._leaflet_id, now);
-        }
-      });
+    // --- 音声テスト ---
+    function voiceTest() {
+      speakQueued("音声テストです。抑揚をつけずに、はっきり話します。");
     }
   </script>
 </body>
