@@ -90,7 +90,7 @@ let watchId = null;
 let currentPoints = [];
 let lastAnnounced = false;
 
-// ===== トースト表示 =====
+// ===== トースト =====
 function showToast(msg, duration=2500){
   const toast = document.getElementById("toast");
   toast.textContent = msg;
@@ -98,7 +98,7 @@ function showToast(msg, duration=2500){
   setTimeout(()=>toast.style.display="none", duration);
 }
 
-// ===== 音声再生 =====
+// ===== 音声 =====
 function speak(text){
   const utter = new SpeechSynthesisUtterance(text);
   utter.lang = "ja-JP";
@@ -125,14 +125,11 @@ async function loadKMZ(url){
   if(routeLayer) map.removeLayer(routeLayer);
   if(pointLayer) map.removeLayer(pointLayer);
 
-  // ルート線だけ描く（Pointは無視して ? を出さない）
   routeLayer = L.geoJSON(geojson, {
     filter: f => f.geometry && (f.geometry.type === "LineString" || f.geometry.type === "MultiLineString"),
-    color:"orange",
-    weight:4
+    color:"orange", weight:4
   }).addTo(map);
 
-  // 評価ポイント
   const points = geojson.features.filter(f=>f.geometry.type==="Point");
   currentPoints = points.map(p=>{
     const name = p.properties.name || "ポイント";
@@ -141,7 +138,6 @@ async function loadKMZ(url){
     return { name, desc, lat, lng, notified:false };
   });
 
-  // 青丸だけ表示
   pointLayer = L.layerGroup(currentPoints.map(p=>{
     return L.circleMarker([p.lat,p.lng], {
       radius:6, color:"blue", fillColor:"blue", fillOpacity:0.8
@@ -154,7 +150,7 @@ async function loadKMZ(url){
   document.getElementById("status").textContent = "ルート読込完了";
 }
 
-// ===== GitHubルート選択 =====
+// ===== ルート選択 =====
 document.getElementById("githubSelect").addEventListener("change",async function(){
   const url = this.value;
   if(!url) return;
@@ -189,78 +185,78 @@ document.getElementById("startBtn").addEventListener("click",()=>{
     return;
   }
 
-  // 通知距離をメニューから取得
   const notifyDistance = parseFloat(document.getElementById("notifyDistance").value) || 120;
 
-  // スタート時に必ず言う
+  // ★押下直後に確実に発話
   speak("評価を開始します。");
   showToast("追跡を開始します");
   document.getElementById("status").textContent="評価中";
   lastAnnounced = false;
 
-  // 初回位置で近いポイントを案内
-  navigator.geolocation.getCurrentPosition(pos=>{
-    const lat=pos.coords.latitude;
-    const lon=pos.coords.longitude;
-    const nearby=currentPoints
-      .map(p=>({...p,dist:calcDistance(lat,lon,p.lat,p.lng)}))
-      .filter(p=>p.dist<=notifyDistance)
-      .sort((a,b)=>a.dist-b.dist);
-    if(nearby.length>0){
-      setTimeout(()=>{
-        for(const np of nearby){
-          const message = np.desc ? `${np.name}、${np.desc}です` : `${np.name}です`;
-          speak(message);
-          showToast(`📍 ${np.name}（約${Math.round(np.dist)}m）`);
-          np.notified=true;
-        }
-      },1000);
-    }
-  });
+  // 位置取得開始（音声のあと）
+  setTimeout(()=>{
+    navigator.geolocation.getCurrentPosition(pos=>{
+      const lat=pos.coords.latitude;
+      const lon=pos.coords.longitude;
+      const nearby=currentPoints
+        .map(p=>({...p,dist:calcDistance(lat,lon,p.lat,p.lng)}))
+        .filter(p=>p.dist<=notifyDistance)
+        .sort((a,b)=>a.dist-b.dist);
+      if(nearby.length>0){
+        setTimeout(()=>{
+          for(const np of nearby){
+            const message = np.desc ? `${np.name}、${np.desc}です` : `${np.name}です`;
+            speak(message);
+            showToast(`📍 ${np.name}（約${Math.round(np.dist)}m）`);
+            np.notified=true;
+          }
+        },1500);
+      }
+    });
 
-  // 継続ウォッチ
-  watchId=navigator.geolocation.watchPosition(pos=>{
-    const lat=pos.coords.latitude;
-    const lon=pos.coords.longitude;
+    // 継続ウォッチ
+    watchId=navigator.geolocation.watchPosition(pos=>{
+      const lat=pos.coords.latitude;
+      const lon=pos.coords.longitude;
 
-    if(!userMarker){
-      userMarker=L.circleMarker([lat,lon],{
-        radius:8,color:"red",fillColor:"#f03",fillOpacity:0.9
-      }).addTo(map);
-    }else{
-      userMarker.setLatLng([lat,lon]);
-    }
+      if(!userMarker){
+        userMarker=L.circleMarker([lat,lon],{
+          radius:8,color:"red",fillColor:"#f03",fillOpacity:0.9
+        }).addTo(map);
+      }else{
+        userMarker.setLatLng([lat,lon]);
+      }
 
-    let allReached=true;
-    for(const p of currentPoints){
-      if(!p.notified){
-        const dist=calcDistance(lat,lon,p.lat,p.lng);
-        if(dist<=notifyDistance){
-          const message = p.desc ? `${p.name}、${p.desc}です` : `${p.name}です`;
-          speak(message);
-          showToast(`📍 ${p.name}（約${Math.round(dist)}m）`);
-          p.notified=true;
-        }else{
-          allReached=false;
+      let allReached=true;
+      for(const p of currentPoints){
+        if(!p.notified){
+          const dist=calcDistance(lat,lon,p.lat,p.lng);
+          if(dist<=notifyDistance){
+            const message = p.desc ? `${p.name}、${p.desc}です` : `${p.name}です`;
+            speak(message);
+            showToast(`📍 ${p.name}（約${Math.round(dist)}m）`);
+            p.notified=true;
+          }else{
+            allReached=false;
+          }
         }
       }
-    }
 
-    if(!lastAnnounced && allReached && currentPoints.length>0){
-      lastAnnounced=true;
-      speak("評価を終了します。お疲れ様でした。");
-      showToast("✅ 評価を終了しました");
-      navigator.geolocation.clearWatch(watchId);
-      watchId=null;
-      document.getElementById("status").textContent="終了";
-    }
-
-  },err=>{
-    showToast("GPSエラー: "+err.message);
-  },{enableHighAccuracy:true});
+      if(!lastAnnounced && allReached && currentPoints.length>0){
+        lastAnnounced=true;
+        speak("評価を終了します。お疲れ様でした。");
+        showToast("✅ 評価を終了しました");
+        navigator.geolocation.clearWatch(watchId);
+        watchId=null;
+        document.getElementById("status").textContent="終了";
+      }
+    },err=>{
+      showToast("GPSエラー: "+err.message);
+    },{enableHighAccuracy:true});
+  }, 800);
 });
 
-// ===== 音声テスト（短いアナウンスにする） =====
+// ===== 音声テスト =====
 document.getElementById("voiceTestBtn").addEventListener("click",()=>{
   speak("音声テストです。");
   showToast("音声テストを再生しました");
