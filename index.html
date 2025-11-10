@@ -17,7 +17,7 @@
       border-radius: 10px;
       padding: 10px;
       box-shadow: 0 0 5px rgba(0,0,0,0.3);
-      width: 320px;
+      width: 340px;
       font-size: 14px;
     }
     .control-box h2 {
@@ -49,53 +49,60 @@
       <select id="courseSelect"></select>
     </div>
     <div style="margin-top: 8px;">
-      <button id="startBtn" class="btn" onclick="startTracking()">追跡開始</button>
+      <button id="startBtn" class="btn" onclick="startTracking(event)">追跡開始</button>
       <button id="nowBtn" class="btn" onclick="goToCurrent()">現在地へ</button>
       <button id="pointBtn" class="btn" onclick="showCheckpoints()">チェックポイント</button>
     </div>
     <div style="margin-top: 8px;">
       <label><input type="checkbox" id="keepCenter" checked> 自車を常に中心</label><br />
-      向き：<label><input type="radio" name="headingMode" value="north" checked> 北を上</label>
+      向き：
+      <label><input type="radio" name="headingMode" value="north" checked> 北を上</label>
       <label><input type="radio" name="headingMode" value="track"> 進行方向を上</label>
     </div>
     <hr>
     <div>
       <label><input type="checkbox" id="voiceGuide" checked> 音声案内ON</label><br>
-      案内距離(m)：<input type="number" id="voiceDistance" value="120" style="width:60px;"> 
+      案内距離(m)：<input type="number" id="voiceDistance" value="120" style="width:60px;">
     </div>
   </div>
 
+  <!-- ライブラリ -->
   <script src="leaflet.js"></script>
   <script src="jszip.min.js"></script>
   <script src="togeojson.umd.js"></script>
 
   <script>
-    let map, trackMarker, pointLayer;
+    // ====== グローバル変数 ======
+    let map;
+    let trackMarker = null;
+    let pointLayer = null;
     let watchId = null;
-    let gpsInitialized = false;
     let kyokoVoice = null;
-    let announcedPoints = new Map();
+    let announcedPoints = new Map();        // ポイントごとの最終案内時刻
     let keepCentered = true;
     let headingMode = "north";
+    let firstPositionHandled = false;       // 最初の位置情報で「一番近いポイント」を読む用
+    const REPEAT_BLOCK_MS = 180000;         // 3分
     const carIcon = L.icon({
       iconUrl: "https://cdn-icons-png.flaticon.com/512/854/854894.png",
       iconSize: [30, 30],
       iconAnchor: [15, 15]
     });
 
-    // ===== 初期化 =====
+    // ====== 初期化 ======
     window.onload = async function() {
+      // 地図
       map = L.map("map").setView([35.4, 139.4], 11);
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: '&copy; OpenStreetMap contributors'
       }).addTo(map);
 
-      // 音声初期化
+      // 音声の取得（きょうこさん）
       speechSynthesis.onvoiceschanged = () => {
-        kyokoVoice = speechSynthesis.getVoices().find(v => v.name.includes("Kyoko"));
+        kyokoVoice = speechSynthesis.getVoices().find(v => v.name.includes("Kyoko")) || null;
       };
 
-      // コース一覧読み込み
+      // コース一覧を読み込み
       const res = await fetch("data/filelist.json");
       const files = await res.json();
       const sel = document.getElementById("courseSelect");
@@ -105,52 +112,53 @@
         opt.textContent = f;
         sel.appendChild(opt);
       });
-
       sel.addEventListener("change", () => loadKMZ(sel.value));
-      loadKMZ(files[0]);
+      if (files.length > 0) loadKMZ(files[0]);
 
+      // UIイベント
       document.getElementById("keepCenter").addEventListener("change", e => keepCentered = e.target.checked);
-      document.querySelectorAll("input[name='headingMode']").forEach(r => 
-        r.addEventListener("change", e => headingMode = e.target.value)
-      );
+      document.querySelectorAll("input[name='headingMode']").forEach(r => {
+        r.addEventListener("change", e => headingMode = e.target.value);
+      });
     };
 
+    // ====== KMZ読み込み ======
     async function loadKMZ(filename) {
+      if (!filename) return;
       if (pointLayer) map.removeLayer(pointLayer);
-      const url = `data/${filename}`;
-      const res = await fetch(url);
+
+      const res = await fetch(`data/${filename}`);
       const blob = await res.blob();
       const zip = await JSZip.loadAsync(blob);
       const kmlFile = Object.keys(zip.files).find(k => k.endsWith(".kml"));
       const kmlText = await zip.file(kmlFile).async("text");
+
       const dom = new DOMParser().parseFromString(kmlText, "text/xml");
       const geojson = toGeoJSON.kml(dom);
+
       pointLayer = L.geoJSON(geojson, {
-        onEachFeature: (feature, layer) => {
-          if (feature.geometry.type === "Point") {
-            const name = feature.properties.name || "チェックポイント";
-            layer.bindPopup(name);
-            layer.setStyle?.({ color: "red", weight: 2 });
-          }
-        },
+        filter: f => f.geometry.type === "Point",
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-          radius: 6, fillColor: "red", color: "black", weight: 1, fillOpacity: 0.8
-        })
+          radius: 6,
+          fillColor: "red",
+          color: "black",      // 黒ふち
+          weight: 2,           // 太くしてスマホでも見えるように
+          fillOpacity: 0.9
+        }).bindPopup(f.properties.name || "チェックポイント")
       }).addTo(map);
-      map.fitBounds(pointLayer.getBounds());
+
+      // ルート(LineString)もあれば表示
+      const routeLayer = L.geoJSON(geojson, {
+        filter: f => f.geometry.type === "LineString",
+        style: { color: "#0ea5e9", weight: 4 }
+      }).addTo(map);
+
+      map.fitBounds(routeLayer.getBounds());
+      announcedPoints.clear();
+      firstPositionHandled = false; // 新しいコースにしたら初回案内もリセット
     }
 
-    // === 現在地へ移動 ===
-    function goToCurrent() {
-      if (trackMarker) map.setView(trackMarker.getLatLng(), 16);
-    }
-
-    // === チェックポイントをズーム ===
-    function showCheckpoints() {
-      if (pointLayer) map.fitBounds(pointLayer.getBounds());
-    }
-
-    // === 中央トースト表示 ===
+    // ====== トースト ======
     function showToast(message) {
       const toast = document.createElement("div");
       toast.textContent = message;
@@ -178,64 +186,141 @@
       }, 2500);
     }
 
-    // === 追跡制御 ===
-    function startTracking() {
-      const btn = event.target;
-      if (!watchId) {
-        if (!navigator.geolocation) return alert("GPS未対応ブラウザです");
+    // ====== 現在地へ ======
+    function goToCurrent() {
+      if (trackMarker) map.setView(trackMarker.getLatLng(), 16);
+    }
 
-        const utter = new SpeechSynthesisUtterance("評価を開始します。");
-        utter.lang = "ja-JP";
-        if (kyokoVoice) utter.voice = kyokoVoice;
+    // ====== チェックポイント全体 ======
+    function showCheckpoints() {
+      if (pointLayer) map.fitBounds(pointLayer.getBounds());
+    }
+
+    // ====== 追跡開始/停止 ======
+    function startTracking(ev) {
+      const btn = ev.target;
+
+      // 開始
+      if (!watchId) {
+        if (!navigator.geolocation) {
+          alert("GPS未対応ブラウザです");
+          return;
+        }
+
+        // ここでだけキャンセルして開始音声を確実に出す
+        const startUtter = new SpeechSynthesisUtterance("評価を開始します。");
+        startUtter.lang = "ja-JP";
+        if (kyokoVoice) startUtter.voice = kyokoVoice;
         speechSynthesis.cancel();
-        speechSynthesis.speak(utter);
+        speechSynthesis.speak(startUtter);
+
         showToast("📡 追跡を開始しました");
         btn.textContent = "追跡停止";
         btn.style.background = "#ef4444";
-        gpsInitialized = true;
 
-        watchId = navigator.geolocation.watchPosition(pos => {
-          const latlng = [pos.coords.latitude, pos.coords.longitude];
-          if (!trackMarker)
-            trackMarker = L.marker(latlng, { icon: carIcon, title: "現在地" }).addTo(map);
-          else
-            trackMarker.setLatLng(latlng);
-          if (keepCentered) map.setView(latlng);
-
-          // 音声案内
-          const voiceEnabled = document.getElementById("voiceGuide").checked;
-          const distanceThreshold = parseInt(document.getElementById("voiceDistance").value) || 120;
-          const now = Date.now();
-
-          if (voiceEnabled && pointLayer) {
-            pointLayer.eachLayer(layer => {
-              const dist = map.distance(latlng, layer.getLatLng());
-              const lastAnnounced = announcedPoints.get(layer._leaflet_id);
-              if (dist < distanceThreshold && (!lastAnnounced || now - lastAnnounced > 180000)) {
-                const name = layer.feature?.properties?.name || "チェックポイント";
-                const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
-                utter.lang = "ja-JP";
-                if (kyokoVoice) utter.voice = kyokoVoice;
-                speechSynthesis.cancel();
-                speechSynthesis.speak(utter);
-                announcedPoints.set(layer._leaflet_id, now);
-              }
-            });
-          }
-        }, err => alert("位置情報エラー: " + err.message),
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 });
-      } else {
+        watchId = navigator.geolocation.watchPosition(
+          positionHandler,
+          err => alert("位置情報エラー: " + err.message),
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+        );
+      }
+      // 停止
+      else {
         navigator.geolocation.clearWatch(watchId);
         watchId = null;
         btn.textContent = "追跡開始";
         btn.style.background = "#22c55e";
         showToast("⏹ 追跡を停止しました");
-        const utter = new SpeechSynthesisUtterance("評価を終了します。");
+
+        const endUtter = new SpeechSynthesisUtterance("評価を終了します。");
+        endUtter.lang = "ja-JP";
+        if (kyokoVoice) endUtter.voice = kyokoVoice;
+        speechSynthesis.cancel();
+        speechSynthesis.speak(endUtter);
+      }
+    }
+
+    // ====== 位置情報の更新時 ======
+    function positionHandler(pos) {
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+      const heading = pos.coords.heading;
+      const latlng = [lat, lng];
+
+      // 自車マーカー
+      if (!trackMarker) {
+        trackMarker = L.marker(latlng, { icon: carIcon, title: "現在地" }).addTo(map);
+      } else {
+        trackMarker.setLatLng(latlng);
+      }
+
+      // 向き
+      if (headingMode === "track" && heading !== null && !isNaN(heading)) {
+        // map.setBearing がある環境だけ
+        map.setBearing?.(heading);
+      }
+      // 中心にする
+      if (document.getElementById("keepCenter").checked) {
+        map.setView(latlng);
+      }
+
+      // 初回位置取得時に「一番近いポイント」が120m以内なら読む
+      if (!firstPositionHandled) {
+        announceNearestIfClose(latlng);
+        firstPositionHandled = true;
+      }
+
+      // 以降は通常の距離判定
+      doProximityVoice(latlng);
+    }
+
+    // ====== 初回用：一番近いポイントを読む ======
+    function announceNearestIfClose(latlng) {
+      if (!pointLayer) return;
+      const threshold = parseInt(document.getElementById("voiceDistance").value) || 120;
+      let nearestLayer = null;
+      let nearestDist = Infinity;
+
+      pointLayer.eachLayer(layer => {
+        const dist = map.distance(latlng, layer.getLatLng());
+        if (dist < nearestDist) {
+          nearestDist = dist;
+          nearestLayer = layer;
+        }
+      });
+
+      if (nearestLayer && nearestDist <= threshold) {
+        const name = nearestLayer.feature?.properties?.name || "スタート地点";
+        const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
         utter.lang = "ja-JP";
         if (kyokoVoice) utter.voice = kyokoVoice;
-        speechSynthesis.cancel();
+        // ★ここでは cancel しない。開始音声を途中で切らないため。
         speechSynthesis.speak(utter);
+        announcedPoints.set(nearestLayer._leaflet_id, Date.now());
       }
+    }
+
+    // ====== 通常の距離判定での音声 ======
+    function doProximityVoice(latlng) {
+      const voiceEnabled = document.getElementById("voiceGuide").checked;
+      if (!voiceEnabled || !pointLayer) return;
+
+      const threshold = parseInt(document.getElementById("voiceDistance").value) || 120;
+      const now = Date.now();
+
+      pointLayer.eachLayer(layer => {
+        const dist = map.distance(latlng, layer.getLatLng());
+        const last = announcedPoints.get(layer._leaflet_id);
+        if (dist < threshold && (!last || (now - last) > REPEAT_BLOCK_MS)) {
+          const name = layer.feature?.properties?.name || "チェックポイント";
+          const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
+          utter.lang = "ja-JP";
+          if (kyokoVoice) utter.voice = kyokoVoice;
+          // ここでも cancel はしない。先行する音声を消さないため。
+          speechSynthesis.speak(utter);
+          announcedPoints.set(layer._leaflet_id, now);
+        }
+      });
     }
   </script>
 </body>
