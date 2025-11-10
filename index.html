@@ -9,6 +9,7 @@
     html, body { height: 100%; margin: 0; padding: 0; }
     #map { height: 100%; width: 100%; }
 
+    /* コントロールボックス */
     .control-box {
       position: absolute;
       top: 10px;
@@ -20,6 +21,13 @@
       box-shadow: 0 0 5px rgba(0,0,0,0.3);
       width: 320px;
       font-size: 14px;
+      transition: opacity 0.3s ease;
+    }
+    .control-box.hidden {
+      opacity: 0.2;
+    }
+    .control-box:hover {
+      opacity: 1.0;
     }
     .control-box h2 {
       margin: 5px 0 8px;
@@ -45,7 +53,7 @@
 <body>
   <div id="map"></div>
 
-  <div class="control-box">
+  <div class="control-box" id="menuBox">
     <h2>実車評価支援ツール</h2>
     <div>
       評価コース：
@@ -53,7 +61,7 @@
     </div>
 
     <div style="margin-top: 8px;">
-      <button id="startBtn" class="btn" onclick="startTracking(event)">追跡開始</button>
+      <button id="startBtn" class="btn" onclick="startTracking()">追跡開始</button>
       <button id="nowBtn" class="btn" onclick="goToCurrent()">現在地へ</button>
       <button id="pointBtn" class="btn" onclick="showCheckpoints()">チェックポイント</button>
       <button id="voiceTestBtn" class="btn" onclick="voiceTest()">音声テスト</button>
@@ -78,34 +86,36 @@
   <script src="togeojson.umd.js"></script>
 
   <script>
-    let map, trackMarker, pointLayer, watchId;
+    let map, trackMarker, routeLayer, pointLayer, watchId;
     let kyokoVoice = null;
-    let announcedPoints = new Map();
     let firstPositionHandled = false;
-    let headingMode = "north";
+    let announcedPoints = new Map();
     const REPEAT_BLOCK_MS = 180000;
 
-    // --- 音声制御キュー ---
-    let isSpeaking = false;
-    let speakQueue = [];
-
-    function speakQueued(text) {
-      if (!kyokoVoice || !text) return;
-      speakQueue.push(text);
-      if (!isSpeaking) processQueue();
+    // --- 音声関連 ---
+    function initVoice() {
+      const voices = speechSynthesis.getVoices();
+      kyokoVoice = voices.find(v => v.name.includes("Kyoko")) || voices.find(v => v.lang === "ja-JP");
+      if (!kyokoVoice) {
+        // Safariでは非同期ロード
+        speechSynthesis.onvoiceschanged = () => {
+          kyokoVoice = speechSynthesis.getVoices().find(v => v.name.includes("Kyoko")) || null;
+        };
+      }
     }
 
-    function processQueue() {
-      if (speakQueue.length === 0) { isSpeaking = false; return; }
-      isSpeaking = true;
-      const text = speakQueue.shift();
+    function speak(text) {
+      if (!kyokoVoice || !text) {
+        console.warn("音声が初期化されていません");
+        return;
+      }
+      speechSynthesis.cancel();
       const u = new SpeechSynthesisUtterance(text);
       u.voice = kyokoVoice;
       u.lang = "ja-JP";
-      u.rate = 0.9;    // ゆっくり
-      u.pitch = 0.65;  // 抑揚を抑える
+      u.pitch = 0.65;
+      u.rate = 0.9;
       u.volume = 1.0;
-      u.onend = () => { isSpeaking = false; processQueue(); };
       speechSynthesis.speak(u);
     }
 
@@ -116,12 +126,8 @@
         attribution: '&copy; OpenStreetMap contributors'
       }).addTo(map);
 
-      // 音声初期化
-      speechSynthesis.onvoiceschanged = () => {
-        kyokoVoice = speechSynthesis.getVoices().find(v => v.name.includes("Kyoko")) || null;
-      };
+      initVoice();
 
-      // コース読込
       try {
         const res = await fetch("data/filelist.json");
         const files = await res.json();
@@ -135,37 +141,55 @@
         sel.addEventListener("change", () => loadKMZ(sel.value));
         if (files.length > 0) loadKMZ(files[0]);
       } catch (e) {
-        console.error("ファイルリストの取得に失敗:", e);
+        console.error("filelist.json取得失敗", e);
       }
 
-      document.querySelectorAll("input[name='headingMode']").forEach(r => {
-        r.addEventListener("change", e => headingMode = e.target.value);
+      // UIをタップで一時的に薄く
+      const menu = document.getElementById("menuBox");
+      let hideTimer;
+      map.on("click", () => {
+        menu.classList.add("hidden");
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => menu.classList.remove("hidden"), 5000);
       });
     };
 
-    // --- KMZ 読み込み ---
+    // --- KMZ読込 ---
     async function loadKMZ(filename) {
       if (!filename) return;
+      if (routeLayer) map.removeLayer(routeLayer);
       if (pointLayer) map.removeLayer(pointLayer);
 
       const res = await fetch(`data/${filename}`);
       const blob = await res.blob();
       const zip = await JSZip.loadAsync(blob);
-      const kmlFile = Object.keys(zip.files).find(name => name.endsWith(".kml"));
+      const kmlFile = Object.keys(zip.files).find(n => n.endsWith(".kml"));
       const kmlText = await zip.file(kmlFile).async("text");
       const kml = new DOMParser().parseFromString(kmlText, "text/xml");
       const geojson = toGeoJSON.kml(kml);
 
-      pointLayer = L.geoJSON(geojson, {
+      // 分離：ライン（オレンジ）／ポイント（青）
+      const lines = geojson.features.filter(f => f.geometry.type.includes("Line"));
+      const points = geojson.features.filter(f => f.geometry.type === "Point");
+
+      routeLayer = L.geoJSON({ type: "FeatureCollection", features: lines }, {
+        style: { color: "orange", weight: 5, opacity: 0.8 }
+      }).addTo(map);
+
+      pointLayer = L.geoJSON({ type: "FeatureCollection", features: points }, {
         pointToLayer: (f, latlng) => L.circleMarker(latlng, {
-          radius: 7, color: "black", weight: 2, fillColor: "red", fillOpacity: 0.8
+          radius: 6,
+          color: "blue",
+          weight: 2,
+          fillColor: "#3399ff",
+          fillOpacity: 0.8
         }),
         onEachFeature: (f, layer) => {
-          if (f.properties && f.properties.name) layer.bindPopup(f.properties.name);
+          if (f.properties?.name) layer.bindPopup(f.properties.name);
         }
       }).addTo(map);
 
-      map.fitBounds(pointLayer.getBounds());
+      map.fitBounds(routeLayer.getBounds());
       announcedPoints.clear();
       firstPositionHandled = false;
     }
@@ -178,14 +202,14 @@
       }
 
       if (!navigator.geolocation) {
-        alert("GPSが利用できません");
+        alert("GPS非対応です");
         return;
       }
 
-      speakQueued("追跡を開始しました。");
+      speak("追跡を開始しました。");
       watchId = navigator.geolocation.watchPosition(
         pos => updatePosition(pos.coords.latitude, pos.coords.longitude),
-        err => console.error(err),
+        err => console.error("GPS取得失敗", err),
         { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
       );
     }
@@ -193,11 +217,16 @@
     // --- 現在位置更新 ---
     function updatePosition(lat, lng) {
       const latlng = [lat, lng];
+
       if (!trackMarker) {
-        trackMarker = L.marker(latlng, { icon: L.icon({
-          iconUrl: "https://cdn-icons-png.flaticon.com/512/854/854894.png",
-          iconSize: [30,30], iconAnchor: [15,15]
-        })}).addTo(map);
+        // 自車位置＝赤丸
+        trackMarker = L.circleMarker(latlng, {
+          radius: 8,
+          color: "red",
+          fillColor: "#ff3333",
+          fillOpacity: 0.9,
+          weight: 2
+        }).addTo(map);
       } else {
         trackMarker.setLatLng(latlng);
       }
@@ -208,67 +237,59 @@
       if (!firstPositionHandled) {
         firstPositionHandled = true;
         const nearest = findNearestPoint(lat, lng);
-        if (nearest) {
-          speakQueued(`まもなく ${nearest.name} です。`);
-        }
+        if (nearest) speak(`まもなく ${nearest.name} です。`);
       }
 
       checkNearbyPoints(lat, lng);
     }
 
-    // --- 最寄りポイント判定 ---
+    // --- 近距離ポイント案内 ---
     function findNearestPoint(lat, lng) {
       if (!pointLayer) return null;
       let minDist = Infinity, nearest = null;
-      pointLayer.eachLayer(layer => {
-        const p = layer.getLatLng();
-        const d = map.distance([lat, lng], p);
+      pointLayer.eachLayer(l => {
+        const d = map.distance([lat, lng], l.getLatLng());
         if (d < minDist) {
           minDist = d;
-          nearest = { name: layer.feature.properties.name, dist: d };
+          nearest = { name: l.feature.properties.name, dist: d };
         }
       });
       return nearest;
     }
 
-    // --- 近距離案内 ---
     function checkNearbyPoints(lat, lng) {
       if (!pointLayer) return;
       const voiceDist = parseFloat(document.getElementById("voiceDistance").value);
-      const guideOn = document.getElementById("voiceGuide").checked;
-      if (!guideOn) return;
+      if (!document.getElementById("voiceGuide").checked) return;
 
-      pointLayer.eachLayer(layer => {
-        const p = layer.getLatLng();
-        const d = map.distance([lat, lng], p);
+      pointLayer.eachLayer(l => {
+        const d = map.distance([lat, lng], l.getLatLng());
         if (d <= voiceDist) {
-          const name = layer.feature.properties.name;
+          const name = l.feature.properties.name;
           const last = announcedPoints.get(name);
           const now = Date.now();
           if (!last || now - last > REPEAT_BLOCK_MS) {
             announcedPoints.set(name, now);
-            speakQueued(`まもなく ${name} です。`);
+            speak(`まもなく ${name} です。`);
           }
         }
       });
     }
 
-    // --- 現在地へ ---
     function goToCurrent() {
       if (trackMarker) map.panTo(trackMarker.getLatLng());
     }
 
-    // --- チェックポイント一覧 ---
     function showCheckpoints() {
       if (!pointLayer) return;
-      let list = [];
-      pointLayer.eachLayer(l => list.push(l.feature.properties.name));
-      alert("チェックポイント:\n" + list.join("\n"));
+      const names = [];
+      pointLayer.eachLayer(l => names.push(l.feature.properties.name));
+      alert("チェックポイント:\n" + names.join("\n"));
     }
 
-    // --- 音声テスト ---
     function voiceTest() {
-      speakQueued("音声テストです。抑揚をつけずに、はっきり話します。");
+      initVoice();
+      setTimeout(() => speak("音声テストです。抑揚をつけずに話します。"), 500);
     }
   </script>
 </body>
