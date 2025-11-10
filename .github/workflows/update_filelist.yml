@@ -1,0 +1,49 @@
+name: Update filelist.json automatically
+
+on:
+  push:
+    paths:
+      - 'data/*.kmz'
+  workflow_dispatch:  # 手動実行も可能
+  schedule:
+    - cron: '0 9 * * *'  # 毎日午前9時(JST18時)に実行
+
+jobs:
+  update-list:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate filelist.json
+        run: |
+          echo "📁 KMZファイルを検出中..."
+          mkdir -p data
+          FILES=$(ls data/*.kmz 2>/dev/null || true)
+          echo "[" > data/filelist.json
+          FIRST=true
+          for FILE in $FILES; do
+            NAME=$(basename "$FILE")
+            if [ "$FIRST" = true ]; then
+              echo "  \"$NAME\"" >> data/filelist.json
+              FIRST=false
+            else
+              echo "  ,\"$NAME\"" >> data/filelist.json
+            fi
+          done
+          echo "]" >> data/filelist.json
+          cat data/filelist.json
+          echo "✅ filelist.json を生成しました"
+
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/filelist.json
+          if git diff --cached --quiet; then
+            echo "変更なし、スキップします。"
+          else
+            git commit -m "Auto-update filelist.json [skip ci]"
+            git push
+          fi
