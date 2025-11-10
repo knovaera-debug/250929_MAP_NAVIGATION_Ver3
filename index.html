@@ -21,6 +21,7 @@
     border-radius: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.3);
     z-index: 9999;
+    max-width: 340px;
   }
 
   button {
@@ -39,6 +40,10 @@
     padding: 10px 16px; border-radius: 10px;
     display: none; z-index: 9999; font-size: 14px;
   }
+
+  label { font-size: 14px; }
+  input[type=number] { width: 90px; }
+  select { width: 100%; }
 </style>
 </head>
 <body>
@@ -57,6 +62,10 @@
       ルートTest.kmz
     </option>
   </select>
+
+  <br><br>
+  <label for="notifyDistance">通知距離（m）：</label>
+  <input type="number" id="notifyDistance" value="120" min="10" step="10">
 
   <br><br>
   <button id="startBtn">追跡開始</button>
@@ -116,8 +125,12 @@ async function loadKMZ(url){
   if(routeLayer) map.removeLayer(routeLayer);
   if(pointLayer) map.removeLayer(pointLayer);
 
-  // ルート線
-  routeLayer = L.geoJSON(geojson, { color:"orange", weight:4 }).addTo(map);
+  // ルート線だけ描く（Pointは無視して ? を出さない）
+  routeLayer = L.geoJSON(geojson, {
+    filter: f => f.geometry && (f.geometry.type === "LineString" || f.geometry.type === "MultiLineString"),
+    color:"orange",
+    weight:4
+  }).addTo(map);
 
   // 評価ポイント
   const points = geojson.features.filter(f=>f.geometry.type==="Point");
@@ -128,7 +141,7 @@ async function loadKMZ(url){
     return { name, desc, lat, lng, notified:false };
   });
 
-  // シンプルな青マーカー
+  // 青丸だけ表示
   pointLayer = L.layerGroup(currentPoints.map(p=>{
     return L.circleMarker([p.lat,p.lng], {
       radius:6, color:"blue", fillColor:"blue", fillOpacity:0.8
@@ -176,15 +189,16 @@ document.getElementById("startBtn").addEventListener("click",()=>{
     return;
   }
 
-  // スタート時のアナウンス（即時）
+  // 通知距離をメニューから取得
+  const notifyDistance = parseFloat(document.getElementById("notifyDistance").value) || 120;
+
+  // スタート時に必ず言う
   speak("評価を開始します。");
   showToast("追跡を開始します");
   document.getElementById("status").textContent="評価中";
+  lastAnnounced = false;
 
-  const notifyDistance=120;
-  lastAnnounced=false;
-
-  // 初回位置取得 → 近距離ポイント案内
+  // 初回位置で近いポイントを案内
   navigator.geolocation.getCurrentPosition(pos=>{
     const lat=pos.coords.latitude;
     const lon=pos.coords.longitude;
@@ -204,7 +218,7 @@ document.getElementById("startBtn").addEventListener("click",()=>{
     }
   });
 
-  // 継続追跡
+  // 継続ウォッチ
   watchId=navigator.geolocation.watchPosition(pos=>{
     const lat=pos.coords.latitude;
     const lon=pos.coords.longitude;
@@ -246,9 +260,9 @@ document.getElementById("startBtn").addEventListener("click",()=>{
   },{enableHighAccuracy:true});
 });
 
-// ===== 音声テスト =====
+// ===== 音声テスト（短いアナウンスにする） =====
 document.getElementById("voiceTestBtn").addEventListener("click",()=>{
-  speak("音声案内テストです。評価ポイントまでの案内を開始します。");
+  speak("音声テストです。");
   showToast("音声テストを再生しました");
 });
 
