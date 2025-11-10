@@ -9,27 +9,27 @@
 <script src="jszip.min.js"></script>
 <script src="togeojson.umd.js"></script>
 <style>
-  body { margin:0; font-family:'Segoe UI',sans-serif; }
-  #map { width:100%; height:100vh; }
-  .control-box {
-    position:absolute; top:10px; left:10px; z-index:9999;
-    background:#fff; padding:10px; border-radius:10px;
-    box-shadow:0 2px 6px rgba(0,0,0,0.3);
-    width:90%; max-width:400px;
-  }
-  button { border:none; border-radius:6px; padding:6px 12px; color:#fff; margin:3px; font-size:15px; }
-  #startBtn { background-color:#007b3d; }
-  #currentBtn { background-color:#007bff; }
-  #menuClose { background-color:gray; }
-  #voiceTest { background-color:#00994c; }
-  .toast {
-    position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
-    background:rgba(0,0,0,0.75); color:#fff; padding:10px 16px;
-    border-radius:8px; z-index:10000; animation:fadeInOut 3s;
-  }
-  @keyframes fadeInOut {
-    0%{opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{opacity:0;}
-  }
+body { margin:0; font-family:'Segoe UI',sans-serif; }
+#map { width:100%; height:100vh; }
+.control-box {
+  position:absolute; top:10px; left:10px; z-index:9999;
+  background:#fff; padding:10px; border-radius:10px;
+  box-shadow:0 2px 6px rgba(0,0,0,0.3);
+  width:90%; max-width:400px;
+}
+button { border:none; border-radius:6px; padding:6px 12px; color:#fff; margin:3px; font-size:15px; }
+#startBtn { background-color:#007b3d; }
+#currentBtn { background-color:#007bff; }
+#menuClose { background-color:gray; }
+#voiceTest { background-color:#00994c; }
+.toast {
+  position:absolute; bottom:30px; left:50%; transform:translateX(-50%);
+  background:rgba(0,0,0,0.75); color:#fff; padding:10px 16px;
+  border-radius:8px; z-index:10000; animation:fadeInOut 3s;
+}
+@keyframes fadeInOut {
+  0%{opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{opacity:0;}
+}
 </style>
 </head>
 <body>
@@ -37,21 +37,18 @@
   <h2>実車評価支援ツール</h2>
   <label>GitHubルート選択：</label>
   <select id="githubRouteSelect"></select><br><br>
-
   <label>通知半径 (m)：</label>
   <input type="number" id="notifyDistance" value="120" style="width:80px;"> <br><br>
-
   <button id="startBtn">追跡開始</button>
   <button id="currentBtn">現在地へ</button>
   <button id="voiceTest">音声テスト</button>
   <button id="menuClose">メニューを閉じる</button>
-
   <p id="status">停止中</p>
 </div>
 <div id="map"></div>
 
 <script>
-// ===== 地図初期化 =====
+// ===== 初期設定 =====
 const map = L.map('map').setView([35.4515, 139.3964], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom:19,
@@ -63,9 +60,8 @@ let currentPoints = [];
 let userMarker = null;
 let watchId = null;
 let lastAnnounced = false;
-let lastSpeakTime = 0;
 
-// ===== トースト表示 =====
+// ===== トースト =====
 function showToast(msg){
   const t=document.createElement("div");
   t.className="toast"; t.textContent=msg;
@@ -73,7 +69,7 @@ function showToast(msg){
   setTimeout(()=>t.remove(),3000);
 }
 
-// ===== 音声再生（Promise） =====
+// ===== 音声 =====
 function speakAsync(text){
   return new Promise(resolve=>{
     const uttr=new SpeechSynthesisUtterance(text);
@@ -93,7 +89,7 @@ function calcDistance(lat1, lon1, lat2, lon2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// ===== GitHubルート一覧 =====
+// ===== ルート選択 =====
 const routes=[
   "data/ルートTest.kmz",
   "data/Final_国内DPコース評価ポイント付き_251007_v10.kmz"
@@ -105,7 +101,7 @@ routes.forEach(p=>{
   sel.appendChild(o);
 });
 
-// ===== KMZ読込 =====
+// ===== KMZロード =====
 async function loadKmzFromGithub(url){
   showToast("ルート読込中...");
   const res=await fetch(url);
@@ -172,22 +168,19 @@ document.getElementById("startBtn").addEventListener("click",async()=>{
   showToast("追跡を開始します");
   lastAnnounced=false;
 
-  // ===== 初期ポイントチェック（1回のみ）=====
   navigator.geolocation.getCurrentPosition(async pos=>{
     const lat=pos.coords.latitude, lon=pos.coords.longitude;
     const nearby=currentPoints
       .map(p=>({...p,dist:calcDistance(lat,lon,p.lat,p.lng)}))
       .filter(p=>p.dist<=notifyDistance)
       .sort((a,b)=>a.dist-b.dist);
-
     for(const np of nearby){
-      const idx=currentPoints.findIndex(x=>x.lat===np.lat && x.lng===np.lng);
+      const idx=currentPoints.findIndex(x=>x.lat===np.lat&&x.lng===np.lng);
       if(idx>=0 && !currentPoints[idx].notified){
         const msg=np.desc?`${np.name}、${np.desc}です`:`${np.name}です`;
         await speakAsync(msg);
         showToast(`📍${np.name}（約${Math.round(np.dist)}m）`);
-        currentPoints[idx].notified=true;
-        lastSpeakTime=Date.now();
+        currentPoints[idx].notified=true; // ← 実体更新
       }
     }
   });
@@ -204,18 +197,18 @@ document.getElementById("startBtn").addEventListener("click",async()=>{
     for(const p of currentPoints){
       if(!p.notified){
         const dist=calcDistance(lat,lon,p.lat,p.lng);
-        if(dist<=notifyDistance && Date.now()-lastSpeakTime>10000){
+        if(dist<=notifyDistance){
           const msg=p.desc?`${p.name}、${p.desc}です`:`${p.name}です`;
           await speakAsync(msg);
           showToast(`📍${p.name}（約${Math.round(dist)}m）`);
-          p.notified=true;
-          lastSpeakTime=Date.now();
+          p.notified=true; // 一度発話したら絶対に再通知しない
         }else{
           allReached=false;
         }
       }
     }
 
+    // 全ポイント完了時
     if(!lastAnnounced && allReached && currentPoints.length>0){
       lastAnnounced=true;
       await speakAsync("評価を終了します。お疲れ様でした。");
