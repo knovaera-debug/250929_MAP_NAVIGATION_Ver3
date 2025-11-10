@@ -6,52 +6,24 @@
 <title>実車評価支援ツール</title>
 <link rel="stylesheet" href="leaflet.css" />
 <style>
-  html, body, #map {
-    height: 100%;
-    margin: 0;
-    padding: 0;
-  }
+  html, body, #map { height: 100%; margin: 0; padding: 0; }
   #control-panel {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    z-index: 1000;
-    background: white;
-    border-radius: 12px;
-    padding: 10px;
+    position: absolute; top: 10px; left: 10px; z-index: 1000;
+    background: white; border-radius: 12px; padding: 10px;
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-    font-family: "Segoe UI", sans-serif;
-    transition: all 0.3s ease;
+    font-family: "Segoe UI", sans-serif; transition: all 0.3s ease;
   }
-  #control-panel.hidden {
-    transform: translateX(-120%);
-    opacity: 0;
-  }
+  #control-panel.hidden { transform: translateX(-120%); opacity: 0; }
   #menu-toggle {
-    position: absolute;
-    top: 10px;
-    left: 10px;
-    z-index: 1100;
-    background: #2563eb;
-    color: white;
-    border: none;
-    border-radius: 6px;
-    padding: 6px 10px;
-    cursor: pointer;
-    font-size: 14px;
+    position: absolute; top: 10px; left: 10px; z-index: 1100;
+    background: #2563eb; color: white; border: none;
+    border-radius: 6px; padding: 6px 10px; cursor: pointer; font-size: 14px;
   }
   #toast {
-    position: absolute;
-    bottom: 15px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(0,0,0,0.8);
-    color: white;
-    padding: 8px 14px;
-    border-radius: 8px;
-    display: none;
-    font-size: 14px;
-    z-index: 2000;
+    position: absolute; bottom: 15px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.8); color: white;
+    padding: 8px 14px; border-radius: 8px; display: none;
+    font-size: 14px; z-index: 2000;
   }
 </style>
 </head>
@@ -92,10 +64,17 @@
     let map, routeLayer, pointLayer, trackMarker, watchId;
     let keepCentered = false;
     let headingMode = 'north';
-    let announcedPoints = new Set();
+    let announcedPoints = new Map();
     let kyokoVoice = null;
+    const preventRepeatMs = 180000; // 3分
+    let gpsInitialized = false;
 
-    // --- 初期設定 ---
+    // 青い車アイコン（進行方向回転対応）
+    const carIcon = L.divIcon({
+      html: '<div style="width:18px;height:18px;border-radius:50%;background:#007bff;border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,0.4);transform:rotate(0deg);" id="carMarker"></div>',
+      className: ""
+    });
+
     window.onload = initMap;
 
     async function initMap() {
@@ -107,7 +86,6 @@
 
       document.getElementById("keepCentered").addEventListener("change", e => keepCentered = e.target.checked);
       document.querySelectorAll('input[name="headingMode"]').forEach(r => r.addEventListener('change', e => headingMode = e.target.value));
-
       document.getElementById("menu-toggle").addEventListener("click", () => {
         document.getElementById("control-panel").classList.toggle("hidden");
       });
@@ -116,7 +94,6 @@
       await loadFileList();
     }
 
-    // --- 音声設定 ---
     function loadVoices() {
       const voices = speechSynthesis.getVoices();
       kyokoVoice = voices.find(v => v.name.includes("Kyoko") || v.name.includes("きょうこ")) || null;
@@ -131,7 +108,6 @@
       speechSynthesis.speak(utter);
     }
 
-    // --- トースト表示 ---
     function showToast(msg) {
       const t = document.getElementById("toast");
       t.innerText = msg;
@@ -139,7 +115,6 @@
       setTimeout(() => t.style.display = "none", 2500);
     }
 
-    // --- コースファイル読込 ---
     async function loadFileList() {
       const select = document.getElementById("fileSelect");
       try {
@@ -166,7 +141,6 @@
       }
     }
 
-    // --- KML描画 ---
     function renderKML(kmlText, name) {
       const parser = new DOMParser();
       const kmlDom = parser.parseFromString(kmlText, "text/xml");
@@ -182,7 +156,7 @@
 
       pointLayer = L.geoJSON(geojson, {
         filter: f => f.geometry.type === "Point",
-        pointToLayer: (f, latlng) => 
+        pointToLayer: (f, latlng) =>
           L.circleMarker(latlng, {
             radius: 6,
             color: "#000000",
@@ -211,7 +185,6 @@
       if (trackMarker) map.panTo(trackMarker.getLatLng());
     }
 
-    // --- 追跡開始 ---
     function startTracking() {
       if (watchId) return;
       if (!navigator.geolocation) {
@@ -219,17 +192,37 @@
         return;
       }
 
-      showToast("📡 追跡を開始しました");
+      showToast("📡 GPS測位中…");
+      gpsInitialized = false;
+
       watchId = navigator.geolocation.watchPosition(
         pos => {
           const lat = pos.coords.latitude;
           const lng = pos.coords.longitude;
+          const heading = pos.coords.heading;
           const latlng = [lat, lng];
 
           if (!trackMarker) {
-            trackMarker = L.marker(latlng, { title: "現在地" }).addTo(map);
+            trackMarker = L.marker(latlng, { icon: carIcon, rotationAngle: 0 }).addTo(map);
           } else {
             trackMarker.setLatLng(latlng);
+          }
+
+          // 初回測位時に音声案内
+          if (!gpsInitialized) {
+            gpsInitialized = true;
+            const utter = new SpeechSynthesisUtterance("現在地を確認しました。ルート案内を開始します。");
+            utter.lang = "ja-JP";
+            if (kyokoVoice) utter.voice = kyokoVoice;
+            speechSynthesis.cancel();
+            speechSynthesis.speak(utter);
+          }
+
+          // 進行方向アイコン回転
+          if (heading !== null && !isNaN(heading)) {
+            const carElem = document.getElementById("carMarker");
+            if (carElem) carElem.style.transform = `rotate(${heading}deg)`;
+            if (headingMode === "track") map.setBearing?.(heading);
           }
 
           if (keepCentered) map.setView(latlng);
@@ -239,16 +232,18 @@
           const distanceThreshold = parseInt(document.getElementById("voiceDistance").value) || 120;
 
           if (voiceEnabled && pointLayer) {
+            const now = Date.now();
             pointLayer.eachLayer(layer => {
               const dist = map.distance(latlng, layer.getLatLng());
-              if (dist < distanceThreshold && !announcedPoints.has(layer._leaflet_id)) {
+              const lastAnnounced = announcedPoints.get(layer._leaflet_id);
+              if (dist < distanceThreshold && (!lastAnnounced || now - lastAnnounced > 180000)) {
                 const name = layer.feature?.properties?.name || "チェックポイント";
                 const utter = new SpeechSynthesisUtterance(`まもなく ${name}`);
                 utter.lang = "ja-JP";
                 if (kyokoVoice) utter.voice = kyokoVoice;
                 speechSynthesis.cancel();
                 speechSynthesis.speak(utter);
-                announcedPoints.add(layer._leaflet_id);
+                announcedPoints.set(layer._leaflet_id, now);
               }
             });
           }
