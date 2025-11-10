@@ -48,7 +48,6 @@
 <div id="menu">
   <h3>実車評価支援ツール</h3>
 
-  <!-- ✅ GitHubルート選択 -->
   <label for="githubSelect">GitHubルート選択：</label><br>
   <select id="githubSelect">
     <option value="">（選択してください）</option>
@@ -89,6 +88,7 @@ let pointLayer = null;
 let userMarker = null;
 let watchId = null;
 let currentPoints = [];
+let lastAnnouncedPoint = null;
 
 // ====== トースト ======
 function showToast(msg, duration=2500){
@@ -122,11 +122,8 @@ async function loadKMZ(blob){
   if(routeLayer) map.removeLayer(routeLayer);
   if(pointLayer) map.removeLayer(pointLayer);
 
-  routeLayer = L.geoJSON(geojson, {
-    color:"orange", weight:4
-  }).addTo(map);
+  routeLayer = L.geoJSON(geojson, { color:"orange", weight:4 }).addTo(map);
 
-  // 評価ポイント（Placemark）
   const points = geojson.features.filter(f=>f.geometry.type==="Point");
   currentPoints = points.map(p=>{
     const name = p.properties.name || "ポイント";
@@ -136,7 +133,8 @@ async function loadKMZ(blob){
 
   pointLayer = L.layerGroup(currentPoints.map(p=>{
     const icon = L.divIcon({
-      html:`<div style="background:white;border:2px solid black;border-radius:12px;padding:2px 4px;color:blue;font-size:12px">${p.name}</div>`
+      html:`<div style="white-space:nowrap; background:white; border:2px solid black; border-radius:10px; padding:2px 5px; color:blue; font-weight:bold; text-align:center;">${p.name}</div>`,
+      className:""
     });
     return L.marker([p.lat,p.lng],{icon});
   })).addTo(map);
@@ -190,16 +188,37 @@ document.getElementById("startBtn").addEventListener("click",()=>{
     watchId=null;
     showToast("追跡停止しました");
     document.getElementById("status").textContent="停止中";
-    speak("追跡を停止しました");
+    speak("評価を終了します。お疲れ様でした。");
     return;
   }
 
   showToast("追跡を開始します");
-  speak("まもなくスタートです。評価を開始します。");
+  speak("評価を開始します。");
   document.getElementById("status").textContent="評価中";
 
   const notifyDistance=parseFloat(document.getElementById("notifyDistance").value||120);
 
+  // 位置取得後に近距離ポイントを即案内
+  navigator.geolocation.getCurrentPosition(pos=>{
+    const lat=pos.coords.latitude;
+    const lon=pos.coords.longitude;
+    const nearby=currentPoints
+      .map(p=>({...p,dist:calcDistance(lat,lon,p.lat,p.lng)}))
+      .filter(p=>p.dist<=notifyDistance)
+      .sort((a,b)=>a.dist-b.dist);
+
+    if(nearby.length>0){
+      setTimeout(()=>{
+        for(const np of nearby){
+          speak(`${np.name} です`);
+          showToast(`📍 ${np.name}（約${Math.round(np.dist)}m）`);
+          np.notified=true;
+        }
+      },1000);
+    }
+  });
+
+  // 継続追跡
   watchId=navigator.geolocation.watchPosition(pos=>{
     const lat=pos.coords.latitude;
     const lon=pos.coords.longitude;
@@ -213,6 +232,7 @@ document.getElementById("startBtn").addEventListener("click",()=>{
     }
 
     // 通知チェック
+    let allReached=true;
     for(const p of currentPoints){
       if(!p.notified){
         const dist=calcDistance(lat,lon,p.lat,p.lng);
@@ -220,8 +240,18 @@ document.getElementById("startBtn").addEventListener("click",()=>{
           speak(`${p.name} です`);
           showToast(`📍 ${p.name}（約${Math.round(dist)}m）`);
           p.notified=true;
+        }else{
+          allReached=false;
         }
       }
+    }
+    if(allReached && currentPoints.length>0 && !lastAnnouncedPoint){
+      lastAnnouncedPoint=true;
+      speak("評価を終了します。お疲れ様でした。");
+      showToast("✅ 評価を終了しました");
+      navigator.geolocation.clearWatch(watchId);
+      watchId=null;
+      document.getElementById("status").textContent="終了";
     }
 
   },err=>{
