@@ -48,18 +48,18 @@ button { border:none; border-radius:6px; padding:6px 12px; color:#fff; margin:3p
 <div id="map"></div>
 
 <script>
-// ===== 初期設定 =====
+// ===== 地図初期化 =====
 const map = L.map('map').setView([35.4515, 139.3964], 15);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom:19,
   attribution:'&copy; OpenStreetMap contributors'
 }).addTo(map);
 
-let routeLine = null;
-let currentPoints = [];
-let userMarker = null;
-let watchId = null;
-let lastAnnounced = false;
+let routeLine=null;
+let currentPoints=[];
+let userMarker=null;
+let watchId=null;
+let lastAnnounced=false;
 
 // ===== トースト =====
 function showToast(msg){
@@ -81,7 +81,7 @@ function speakAsync(text){
 }
 
 // ===== 距離計算 =====
-function calcDistance(lat1, lon1, lat2, lon2){
+function calcDistance(lat1,lon1,lat2,lon2){
   const R=6371000;
   const toRad=x=>x*Math.PI/180;
   const dLat=toRad(lat2-lat1), dLon=toRad(lon2-lon1);
@@ -89,7 +89,7 @@ function calcDistance(lat1, lon1, lat2, lon2){
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
 }
 
-// ===== ルート選択 =====
+// ===== GitHubルート =====
 const routes=[
   "data/ルートTest.kmz",
   "data/Final_国内DPコース評価ポイント付き_251007_v10.kmz"
@@ -119,14 +119,28 @@ async function loadKmzFromGithub(url){
   geojson.features.forEach(f=>{
     if(f.geometry.type==="LineString"){
       routeLine=L.polyline(f.geometry.coordinates.map(c=>[c[1],c[0]]),{color:"orange",weight:5}).addTo(map);
-    }else if(f.geometry.type==="Point"){
+    }
+    // ★ 評価ポイントのみ抽出
+    else if(f.geometry.type==="Point"){
       const [lon,lat]=f.geometry.coordinates;
-      const name=f.properties.name||"";
-      const desc=f.properties.description||"";
+      const name=f.properties.name?.trim()||"";
+      const desc=f.properties.description?.trim()||"";
+
+      // ★ ルート案内ピン除外条件
+      // ① descriptionが存在しない or 空文字
+      // ② nameが「A」「B」「ポイント」「分岐」などで始まる
+      const isRoutePoint = (
+        !desc ||
+        /^(A|B|C|D|E|分岐|ポイント|案内|経路)/.test(name)
+      );
+      if(isRoutePoint) return; // ★スキップ
+
+      // ★評価ポイントとして登録
       const m=L.circleMarker([lat,lon],{radius:8,color:"black",fillColor:"blue",fillOpacity:0.9}).addTo(map);
       currentPoints.push({lat,lng:lon,name,desc,marker:m,notified:false});
     }
   });
+
   if(routeLine){ map.fitBounds(routeLine.getBounds()); }
   showToast("ルート読込完了");
 }
@@ -134,9 +148,7 @@ loadKmzFromGithub(sel.value);
 sel.addEventListener("change",()=>loadKmzFromGithub(sel.value));
 
 // ===== 音声テスト =====
-document.getElementById("voiceTest").addEventListener("click",()=>{
-  speakAsync("音声案内のテストです。");
-});
+document.getElementById("voiceTest").addEventListener("click",()=>{ speakAsync("音声案内のテストです。"); });
 
 // ===== メニュー閉じる =====
 document.getElementById("menuClose").addEventListener("click",()=>{
@@ -180,7 +192,7 @@ document.getElementById("startBtn").addEventListener("click",async()=>{
         const msg=np.desc?`${np.name}、${np.desc}です`:`${np.name}です`;
         await speakAsync(msg);
         showToast(`📍${np.name}（約${Math.round(np.dist)}m）`);
-        currentPoints[idx].notified=true; // ← 実体更新
+        currentPoints[idx].notified=true;
       }
     }
   });
@@ -201,14 +213,13 @@ document.getElementById("startBtn").addEventListener("click",async()=>{
           const msg=p.desc?`${p.name}、${p.desc}です`:`${p.name}です`;
           await speakAsync(msg);
           showToast(`📍${p.name}（約${Math.round(dist)}m）`);
-          p.notified=true; // 一度発話したら絶対に再通知しない
+          p.notified=true;
         }else{
           allReached=false;
         }
       }
     }
 
-    // 全ポイント完了時
     if(!lastAnnounced && allReached && currentPoints.length>0){
       lastAnnounced=true;
       await speakAsync("評価を終了します。お疲れ様でした。");
